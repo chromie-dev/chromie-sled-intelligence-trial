@@ -1,0 +1,11 @@
+sources:
+  - id: ca_city_portal
+    mode: fixture
+    jurisdiction: California city
+  - id: ga_county_portal
+    mode: fixture
+    jurisdiction: Georgia county
+  - id: school_district_portal
+    mode: fixture
+    jurisdiction: Public school district
+
