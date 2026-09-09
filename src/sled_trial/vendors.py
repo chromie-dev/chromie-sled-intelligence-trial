@@ -23,7 +23,7 @@ import re
 import statistics
 from typing import Any, Callable, Iterable
 
-from .sources import scprs
+from .sources.ca import scprs
 
 MAX_EVIDENCE_REFS = 25
 # SCPRS data begins with state fiscal year 2010 (from 2009-07-01), so anything earlier is
@@ -280,7 +280,7 @@ def attach_spending(profiles: list[dict[str, Any]],
 
     `spending` is the output of `openfiscal.aggregate_by_vendor`, keyed by normalised name.
     """
-    from .sources import openfiscal
+    from .sources.ca import openfiscal
 
     matched = ambiguous = 0
     for profile in profiles:

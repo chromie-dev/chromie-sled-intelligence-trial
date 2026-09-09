@@ -17,10 +17,10 @@ import pathlib
 import sys
 from typing import Any
 
-from . import assemble, documents, extract
+from . import assemble, documents, extract, sources
 from .assemble import (ENRICHMENTS, _opportunity_intelligence, _participants,
                        _read_jsonl, _source_coverage)
-from .sources import caleprocure as ca
+from .sources.ca import caleprocure as ca
 
 DEFAULT_RAW = "data/raw/documents"
 
@@ -107,7 +107,7 @@ def cmd_spending(args: argparse.Namespace) -> int:
     deliverable command stays fast.
     """
     from . import vendors
-    from .sources import openfiscal as of
+    from .sources.ca import openfiscal as of
 
     outdir = pathlib.Path(args.output)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -195,7 +195,7 @@ def cmd_bidders(args: argparse.Namespace) -> int:
     """
     import datetime as dt
 
-    from .sources import caltrans, scprs
+    from .sources.ca import caltrans, scprs
 
     outdir = pathlib.Path(args.output)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -248,7 +248,7 @@ def cmd_tabulations(args: argparse.Namespace) -> int:
     San Francisco posts the whole field as a PDF attachment to the commission item that
     awards the contract, with an engineer's estimate the Caltrans pages do not carry.
     """
-    from .sources import sfpublicworks as sfpw
+    from .sources.ca import sfpublicworks as sfpw
 
     outdir = pathlib.Path(args.output)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -336,7 +336,7 @@ def cmd_backfill_primes(args: argparse.Namespace) -> int:
     however deep its history -- so relative standing inside the set is unchanged.
     """
     from . import primes
-    from .sources import scprs
+    from .sources.ca import scprs
 
     outdir = pathlib.Path(args.output)
     awards_path = outdir / "awards.jsonl"
@@ -379,7 +379,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     from . import lineage as lineage_mod
     from . import page_review
     from . import predict, primes, report as report_mod, supabase_export as se, vendors
-    from .sources import scprs
+    from .sources.ca import scprs
 
     path = pathlib.Path(args.opportunity)
     if not path.exists():
@@ -425,9 +425,11 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     print("  [3/9] observed participants")
     known = assemble.observed_participants(_participants(pages), outdir)
     documents.write_jsonl(known, outdir / "participant_candidates.jsonl")
-    harvested = sum(1 for k in known if k.get("source_key") == "caltrans_bid_results")
-    if harvested:
-        print(f"        {len(known)} candidates ({harvested} from Caltrans bid results)")
+    by_source = collections.Counter(k.get("source_key") for k in known)
+    named = ", ".join(f"{by_source[s.key]} from {s.label}"
+                      for s in sources.BIDDER_SOURCES if by_source[s.key])
+    if named:
+        print(f"        {len(known)} candidates ({named})")
 
     # 4. Award history for this buyer and category, plus a dated window for context.
     print("  [4/9] award history")
@@ -486,12 +488,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     # spending enrichment entirely, so the command meant to produce the deliverable destroyed
     # part of it. The download lives in the `spending` subcommand; this only consumes it.
     for filename, key, attach_name in ENRICHMENTS:
-        cache = outdir / filename
         attach = getattr(vendors, attach_name)
-        if not cache.exists():
+        payload = assemble.enrichment_payload(outdir, filename, key)
+        if payload is None:
             print(f"        {attach_name}: no {filename} cached, dimension left unpopulated")
             continue
-        joined = attach(profiles, assemble.load_enrichment(cache, key))
+        joined = attach(profiles, payload)
         print(f"        {attach_name}: {joined['matched']} of {joined['profiles']} profiles")
     (outdir / "vendor_profiles.json").write_text(json.dumps(profiles, indent=1, default=str))
     observed_ids = {p["supplier_id"] for p in profiles

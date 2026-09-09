@@ -7,7 +7,7 @@ the rank.
 import datetime as dt
 import unittest
 
-from sled_trial.sources import caltrans
+from sled_trial.sources.ca import caltrans
 
 WEEK_PAGE = """
 <h1>Bid Results: Week of January 11, 2026</h1>

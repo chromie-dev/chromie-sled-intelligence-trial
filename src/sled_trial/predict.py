@@ -25,7 +25,7 @@ import re
 import statistics
 from typing import Any, Iterable
 
-from .sources import scprs
+from .sources.ca import scprs
 from .vendors import EARLIEST_PLAUSIBLE, normalize_name
 
 # Weights are hand-set and published. Participation history dominates; eligibility signals

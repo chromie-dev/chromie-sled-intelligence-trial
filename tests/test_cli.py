@@ -5,7 +5,7 @@ import pathlib
 import tempfile
 import unittest
 
-from sled_trial import assemble, cli
+from sled_trial import assemble, cli, sources
 
 
 class EventPairTests(unittest.TestCase):
@@ -318,6 +318,48 @@ class AwardWindowTests(unittest.TestCase):
 
     def test_it_handles_a_month_boundary(self) -> None:
         self.assertEqual(assemble.default_awards_from("03/02/2026"), "02/23/2026")
+
+
+class BidHistoryEnrichmentTests(unittest.TestCase):
+    def test_win_rates_see_every_bidder_source_not_just_the_first(self) -> None:
+        # Declaring one cache filename meant a second jurisdiction's bidders never reached
+        # the win-rate join, silently.
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = pathlib.Path(tmp)
+            (outdir / "caltrans_bidders.jsonl").write_text(json.dumps(
+                {"vendor_name_raw": "A", "event_id": "1", "rank": 1}) + "\n")
+            (outdir / "sf_bidders.jsonl").write_text(json.dumps(
+                {"vendor_name_raw": "B", "event_id": "2", "rank": 1}) + "\n")
+            payload = assemble.enrichment_payload(outdir, assemble.BIDDER_ROWS, None)
+        self.assertEqual(sorted(r["vendor_name_raw"] for r in payload), ["A", "B"])
+
+    def test_a_missing_cache_reads_as_absent_not_as_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = assemble.enrichment_payload(pathlib.Path(tmp), "spending_index.json",
+                                                  "index")
+        self.assertIsNone(payload)
+
+
+class BidderSourceRegistryTests(unittest.TestCase):
+    """Adding a jurisdiction should mean adding a registry row, not editing four files."""
+
+    def test_every_declared_source_has_a_distinct_cache_and_key(self) -> None:
+        keys = [s.key for s in sources.BIDDER_SOURCES]
+        caches = [s.cache for s in sources.BIDDER_SOURCES]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertEqual(len(caches), len(set(caches)))
+
+    def test_the_merge_reads_every_declared_cache(self) -> None:
+        # Not a hardcoded tuple of filenames: a source declared but unread is how the
+        # prime-enrichment corpus sat in build/ unused.
+        self.assertEqual(sorted(assemble.bidder_caches()),
+                         sorted(s.cache for s in sources.BIDDER_SOURCES))
+
+    def test_a_city_source_keeps_its_own_solicitation_registry(self) -> None:
+        sf = sources.BY_KEY["sfpublicworks_bid_tabulation"]
+        caltrans = sources.BY_KEY["caltrans_bid_results"]
+        self.assertEqual(sf.record_source, "sfpublicworks_bid_tabulation")
+        self.assertEqual(caltrans.record_source, "caleprocure_event_list")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Offline tests for the SCPRS award-registry adapter. No network."""
 import unittest
 
-from sled_trial.sources import scprs
+from sled_trial.sources.ca import scprs
 
 # Result-grid markup uses double-quoted attributes; the surrounding page uses single
 # quotes. A single-quote-only pattern returns zero rows and mimics "no awards found".

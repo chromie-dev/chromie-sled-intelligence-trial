@@ -6,7 +6,7 @@ price order, so rank has to be derived rather than read off the page.
 """
 import unittest
 
-from sled_trial.sources import sfpublicworks
+from sled_trial.sources.ca import sfpublicworks
 
 TABULATION = """City and County of San Francisco
 Department of Public Works

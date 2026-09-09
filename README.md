@@ -355,3 +355,26 @@ The output must explain both why the company is credible as a prime and why a su
 The trial is complete when a reviewer can give the system one active California RFP URL and the system autonomously retrieves the relevant public documents, traces the procurement lineage, and returns a defensible competitive landscape, a ranked list of likely bidders, and a shortlist of credible primes for subcontracting outreach—with every fact traceable to a source document and page, every prediction clearly labeled, and every output validated against Chromie's frozen Supabase data contracts.
 
 See `PROJECT_BRIEF.md`, `SECURITY.md`, and `AGENTS.md` before coding.
+
+---
+
+## Running this submission
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+python -m pytest -q                 # 434 tests, offline, no credentials
+
+python -m sled_trial.cli analyze \
+  --opportunity data/examples/active_opportunity.json \
+  --download-documents --output build
+```
+
+Other commands: `events`, `documents`, `spending`, `evaluate` (regenerates the precision
+figures offline), `bidders --resolve` and `tabulations` (harvest the two surfaces that
+publish full bidder fields), `backfill-primes`. Run `evaluate` before `analyze` if you want
+`report.md` to quote the current figures.
+
+`build/` and `data/raw/` are generated and gitignored. Findings, dead ends and measured
+source limits are in `DECISIONS.md`; the surveyed surfaces are in
+`sources/source_registry.csv` and `docs/SOURCES.md`.

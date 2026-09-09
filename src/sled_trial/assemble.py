@@ -12,7 +12,7 @@ import json
 import pathlib
 from typing import Any, Iterable
 
-from . import documents, extract
+from . import documents, extract, sources
 
 def _participants(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Candidate participants, each carrying the document and page that support it.
@@ -46,22 +46,38 @@ def _participants(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # adding a row here, and `test_cli.py` asserts every declared enrichment is applied.
 #
 #   (cache filename, key inside the cache or None for the whole file, attach function name)
-# Every harvested bidder source writes one of these. Adding a source means adding a row
-# here, so a second harvester cannot end up written and unread the way the prime-enrichment
-# corpus did.
-BIDDER_CACHES = ("caltrans_bidders.jsonl", "sf_bidders.jsonl")
+
+# Stands in for "every declared bidder cache" in ENRICHMENTS, which names single files.
+BIDDER_ROWS = "<all bidder caches>"
+
+
+def bidder_caches() -> tuple[str, ...]:
+    """Build-directory files the declared bidder sources write, read back on every merge."""
+    return tuple(source.cache for source in sources.BIDDER_SOURCES)
+
 
 ENRICHMENTS = (
     ("spending_index.json", "index", "attach_spending"),
     ("supplier_locations.json", None, "attach_location"),
-    # A .jsonl cache: `load_enrichment` reads either form, because the bidder harvest is a
-    # row stream while the other two are single documents.
-    ("caltrans_bidders.jsonl", None, "attach_bid_history"),
+    # Every declared bidder cache at once. Naming one filename here meant a second
+    # jurisdiction's bidders never reached the win-rate join.
+    (BIDDER_ROWS, None, "attach_bid_history"),
 )
 
 
-def load_enrichment(cache: pathlib.Path, key: str | None) -> Any:
-    """Read one enrichment cache, JSON or JSONL, and unwrap it if it names a key."""
+def enrichment_payload(outdir: pathlib.Path, filename: str,
+                       key: str | None) -> Any | None:
+    """Load one enrichment's data, or None when nothing has been harvested for it.
+
+    None and empty are different answers: an absent cache means the step was never run,
+    which the caller reports as an unpopulated dimension rather than as zero matches.
+    """
+    if filename == BIDDER_ROWS:
+        rows = [row for cache in bidder_caches() for row in _read_jsonl(outdir / cache)]
+        return rows or None
+    cache = outdir / filename
+    if not cache.exists():
+        return None
     if cache.suffix == ".jsonl":
         return _read_jsonl(cache)
     payload = json.loads(cache.read_text())
@@ -217,7 +233,7 @@ def observed_participants(document_candidates: list[dict[str, Any]],
     harvest does not inflate the participant count.
     """
     rows = list(document_candidates)
-    cached = [row for cache in BIDDER_CACHES for row in _read_jsonl(outdir / cache)]
+    cached = [row for cache in bidder_caches() for row in _read_jsonl(outdir / cache)]
     seen = {(r.get("business_unit"), r.get("event_id"), r.get("vendor_name_raw"))
             for r in rows}
     for row in cached:

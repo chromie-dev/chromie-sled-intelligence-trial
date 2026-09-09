@@ -2,7 +2,7 @@
 import unittest
 
 from sled_trial import vendors
-from sled_trial.sources import supplier_search as ss
+from sled_trial.sources.ca import supplier_search as ss
 
 # Shaped like the real response: one result grid plus form dropdowns with MORE rows than
 # results. A first version keyed rows off the highest index anywhere on the page, reported

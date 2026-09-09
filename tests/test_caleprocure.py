@@ -2,7 +2,7 @@
 import pathlib
 import unittest
 
-from sled_trial.sources import caleprocure as ca
+from sled_trial.sources.ca import caleprocure as ca
 
 FIX = pathlib.Path(__file__).parent / "fixtures"
 

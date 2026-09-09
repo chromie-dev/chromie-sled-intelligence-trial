@@ -12,6 +12,8 @@ import pathlib
 import uuid
 from typing import Any, Iterable
 
+from . import sources
+
 # Fixed namespace so ids are reproducible across machines and runs. Not a Chromie value.
 NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://chromie.dev/trial/sled/local")
 
@@ -336,7 +338,7 @@ def event_record_rows(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def award_record_rows(awards: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """SCPRS awards -> gov_procurement_records of type `award`."""
-    from .sources import scprs
+    from .sources.ca import scprs
     out = []
     for award in awards:
         doc = award.get("purchase_doc")
@@ -402,7 +404,7 @@ def participant_rows(observed: Iterable[dict[str, Any]],
     Two roles are emitted: `awardee` derived from an SCPRS award row, and `known_bidder`
     observed in an official document that names a vendor and an amount.
     """
-    from .sources import scprs
+    from .sources.ca import scprs
     out = []
     for award in awards:
         doc, sid = award.get("purchase_doc"), award.get("supplier_id")
@@ -425,12 +427,11 @@ def participant_rows(observed: Iterable[dict[str, Any]],
         })
     for candidate in observed:
         external = f"{candidate.get('business_unit')}/{candidate.get('event_id')}"
-        # The solicitation record belongs to whichever registry actually lists it. San
-        # Francisco has no Cal eProcure event, so hanging its sourcing id off the state
-        # event list would assert a record that does not exist.
-        record_source = ("sfpublicworks_bid_tabulation"
-                         if candidate.get("source_key") == "sfpublicworks_bid_tabulation"
-                         else "caleprocure_event_list")
+        # The solicitation record belongs to whichever registry actually lists it. A city
+        # has no Cal eProcure event, so hanging its sourcing id off the state event list
+        # would assert a record that does not exist. Declared per source, not branched on.
+        declared = sources.BY_KEY.get(candidate.get("source_key") or "")
+        record_source = declared.record_source if declared else "caleprocure_event_list"
         record_id = local_id("gov_procurement_records", record_source,
                              "solicitation", external)
         # Identity is unresolved until the extracted name matches an SCPRS supplier_id, so

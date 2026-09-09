@@ -2,7 +2,7 @@
 import unittest
 
 from sled_trial import vendors
-from sled_trial.sources import openfiscal as of
+from sled_trial.sources.ca import openfiscal as of
 
 MANIFEST_CSV = (
     b"FileName,UploadDate,FileSize,Download\n"
