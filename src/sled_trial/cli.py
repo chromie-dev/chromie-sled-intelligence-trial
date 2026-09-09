@@ -437,13 +437,24 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         awards = [json.loads(l) for l in cached.read_text().splitlines() if l.strip()]
         print(f"        reused {len(awards)} cached award rows")
     else:
-        window_from = args.awards_from or "09/01/2026"
+        window_from = args.awards_from or assemble.default_awards_from(cutoff)
+        slices = []
         for result in scprs.search_date_sliced(session, window_from, cutoff):
             # A subdivided parent slice is yielded for its shortfall note and carries the
             # same rows its children already yielded. Taking them again double-counts.
             if result.get("subdivided"):
                 continue
+            slices.append(result)
             awards += result["rows"]
+        coverage = assemble.award_sweep_coverage(slices)
+        (outdir / "awards_coverage.json").write_text(
+            json.dumps({**coverage, "window": {"from": window_from, "to": cutoff}},
+                       indent=1, default=str))
+        if not coverage["complete"]:
+            print(f"        WARNING: {coverage['slices_truncated']} of "
+                  f"{coverage['slices']} slices hit the grid cap; "
+                  f"{coverage['rows_reported_by_portal'] - coverage['rows_collected']} "
+                  f"reported rows not retrieved (see awards_coverage.json)")
         seen: set[tuple[Any, Any]] = set()
         deduped = []
         for row in awards:
@@ -612,7 +623,8 @@ def build_parser() -> argparse.ArgumentParser:
     an.add_argument("--opportunity", required=True)
     an.add_argument("--download-documents", action="store_true")
     an.add_argument("--awards-from", default=None,
-                    help="start of the award-history window, MM/DD/YYYY")
+                    help="start of the award-history window, MM/DD/YYYY; defaults to "
+                         f"{assemble.DEFAULT_AWARD_WINDOW_DAYS} days before the cutoff")
     an.add_argument("--reuse-awards", action="store_true",
                     help="reuse build/awards.jsonl instead of re-querying")
     an.add_argument("--review-pages", type=int, default=20,

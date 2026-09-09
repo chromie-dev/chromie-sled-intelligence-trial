@@ -277,5 +277,48 @@ class ProfileCorpusTests(unittest.TestCase):
                         f"prediction must rank on the sweep: {rank_call[:80]}")
 
 
+class AwardSweepCoverageTests(unittest.TestCase):
+    """A slice that hit the 200-row cap lost rows. Silence there is data loss."""
+
+    def test_truncated_slices_are_counted_and_named(self) -> None:
+        results = [
+            {"slice": {"from": "09/01/2026", "to": "09/01/2026"}, "rows": [1] * 200,
+             "truncated": True, "total_reported": 431},
+            {"slice": {"from": "09/02/2026", "to": "09/02/2026"}, "rows": [1] * 12,
+             "truncated": False, "total_reported": 12},
+        ]
+        out = assemble.award_sweep_coverage(results)
+        self.assertEqual(out["slices"], 2)
+        self.assertEqual(out["slices_truncated"], 1)
+        self.assertEqual(out["rows_collected"], 212)
+        self.assertEqual(out["rows_reported_by_portal"], 443)
+        self.assertEqual(out["truncated_slices"][0]["from"], "09/01/2026")
+
+    def test_a_complete_sweep_reports_no_shortfall(self) -> None:
+        results = [{"slice": {"from": "09/02/2026", "to": "09/02/2026"}, "rows": [1] * 12,
+                    "truncated": False, "total_reported": 12}]
+        out = assemble.award_sweep_coverage(results)
+        self.assertEqual(out["slices_truncated"], 0)
+        self.assertTrue(out["complete"])
+
+    def test_an_incomplete_sweep_says_so(self) -> None:
+        results = [{"slice": {"from": "09/01/2026", "to": "09/01/2026"}, "rows": [1] * 200,
+                    "truncated": True, "total_reported": 431}]
+        out = assemble.award_sweep_coverage(results)
+        self.assertFalse(out["complete"])
+        self.assertIn("cap", out["note"].lower())
+
+
+class AwardWindowTests(unittest.TestCase):
+    def test_the_default_window_is_derived_from_the_cutoff_not_hardcoded(self) -> None:
+        # A hardcoded start date meant the README command swept three days while the
+        # shipped corpus came from seven, so the deliverable could not be reproduced by
+        # the command the brief tells a reviewer to run.
+        self.assertEqual(assemble.default_awards_from("09/03/2026"), "08/27/2026")
+
+    def test_it_handles_a_month_boundary(self) -> None:
+        self.assertEqual(assemble.default_awards_from("03/02/2026"), "02/23/2026")
+
+
 if __name__ == "__main__":
     unittest.main()

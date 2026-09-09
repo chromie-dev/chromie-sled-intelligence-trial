@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import collections
 import csv
+import datetime as dt
 import json
 import pathlib
 from typing import Any, Iterable
@@ -270,3 +271,46 @@ def profile_corpus(awards: list[dict[str, Any]],
         seen.add(key)
         merged.append(row)
     return merged
+
+
+# How far back the award sweep reaches when the caller does not say. Seven days is what
+# produced the shipped corpus; a hardcoded start date meant the README command swept a
+# different window than the deliverable was built from, so the numbers could not be
+# reproduced by the command the brief tells a reviewer to run.
+DEFAULT_AWARD_WINDOW_DAYS = 7
+
+
+def default_awards_from(cutoff: str) -> str:
+    """Start of the award window for a given cutoff, both MM/DD/YYYY."""
+    end = dt.datetime.strptime(cutoff, "%m/%d/%Y").date()
+    return (end - dt.timedelta(days=DEFAULT_AWARD_WINDOW_DAYS)).strftime("%m/%d/%Y")
+
+
+def award_sweep_coverage(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """What the award sweep actually collected against what the portal said existed.
+
+    The grid caps at 200 rows and cannot be paged, so a slice still truncated after
+    bisection has silently dropped rows. `search_date_sliced` flags that per slice and
+    nothing was reading the flag, which made a capped sweep indistinguishable from a
+    complete one -- the same class of silence as a soft-404 reading as "no results".
+    """
+    truncated = [r for r in results if r.get("truncated")]
+    collected = sum(len(r.get("rows") or []) for r in results)
+    reported = sum(int(r.get("total_reported") or 0) for r in results)
+    return {
+        "slices": len(results),
+        "slices_truncated": len(truncated),
+        "rows_collected": collected,
+        "rows_reported_by_portal": reported,
+        "complete": not truncated,
+        "truncated_slices": [
+            {**(r.get("slice") or {}), "rows_collected": len(r.get("rows") or []),
+             "rows_reported": r.get("total_reported")}
+            for r in truncated
+        ],
+        "note": ("every slice came back under the grid cap, so this window is complete"
+                 if not truncated else
+                 f"{len(truncated)} slice(s) hit the {200}-row grid cap after bisection, so "
+                 f"{reported - collected} row(s) the portal reported were not retrieved; "
+                 f"narrow the window or pass a second subdivision axis"),
+    }
