@@ -1,8 +1,8 @@
 # Data sources
 
 Every California surface this pipeline touches, what it provides, and whether we can
-actually use it. Generated from `sources/source_registry.csv`, which holds the full
-18-field access research for each one.
+actually use it. `sources/source_registry.csv` holds the full 18-field access research for
+each one and is the source of truth; a test fails if a registry row is missing here.
 
 Two links are given where they differ: the **human page** you can open in a browser,
 and the **machine endpoint** the pipeline calls. They are not the same. The browser

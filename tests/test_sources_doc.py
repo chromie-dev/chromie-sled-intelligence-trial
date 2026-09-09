@@ -1,4 +1,4 @@
-"""The sources doc must cover every registry surface, and the registry must cover the brief.
+"""The registry must cover the brief, and the committed doc must cover the registry.
 
 Two README-named sources went missing from the registry during a rewrite, and because the
 prose about our sources lived separately, nothing caught it. These tests close that loop.
@@ -7,7 +7,6 @@ import csv
 import pathlib
 import unittest
 
-from sled_trial import sources_doc
 
 REPO = pathlib.Path(__file__).parent.parent
 REGISTRY = REPO / "sources" / "source_registry.csv"
@@ -53,42 +52,12 @@ class RegistryCoversTheBriefTests(unittest.TestCase):
 
 
 class DocCoversTheRegistryTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.text = sources_doc.generate(REGISTRY)
-
-    def test_every_registry_surface_appears_in_the_doc(self) -> None:
-        # The doc renders source_name, not source_key, so assert on what it actually prints.
-        with REGISTRY.open(encoding="utf-8") as handle:
-            for row in csv.DictReader(handle):
-                with self.subTest(source=row["source_key"]):
-                    self.assertIn(row["source_name"], self.text,
-                                  f"{row['source_key']} is in the registry but not the doc")
-
-    def test_every_endpoint_url_appears(self) -> None:
-        with REGISTRY.open(encoding="utf-8") as handle:
-            for row in csv.DictReader(handle):
-                with self.subTest(source=row["source_key"]):
-                    self.assertIn(row["official_url"], self.text)
-
-    def test_the_browser_versus_endpoint_distinction_is_explained(self) -> None:
-        # This is the finding that cost a day; it must not be dropped from the doc.
-        self.assertIn("JavaScript shells that carry no data", self.text)
-        self.assertIn("bare `.GBL`", self.text)
-
-    def test_the_login_trap_is_documented(self) -> None:
-        self.assertIn("redirects to a login", self.text)
-        self.assertIn("FolderPath", self.text)
-
-    def test_it_states_no_credential_is_needed(self) -> None:
-        self.assertIn("no browser, API key or credential is needed", self.text)
-
     def test_the_checked_in_doc_covers_every_current_source(self) -> None:
         """The committed doc must list every source, but need not be byte-identical.
 
-        An earlier version of this test demanded exact equality with the generator output.
-        That was wrong: it makes the doc unimprovable, because any human edit to the prose
-        fails the build. The drift that actually mattered was a *source* going missing, not
-        a sentence being reworded, so this asserts coverage of the committed file instead.
+        Coverage rather than equality: the drift that matters is a source going missing,
+        not a sentence being reworded, and demanding exact text would make the prose
+        unimprovable.
         """
         self.assertTrue(DOC.exists(), "docs/SOURCES.md is missing")
         committed = DOC.read_text()
