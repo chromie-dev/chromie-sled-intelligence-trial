@@ -320,6 +320,32 @@ class AwardWindowTests(unittest.TestCase):
         self.assertEqual(assemble.default_awards_from("03/02/2026"), "02/23/2026")
 
 
+class TargetStillActiveTests(unittest.TestCase):
+    """The feed is active-only, so an absent target is a fact worth stating."""
+
+    OPP = {"business_unit": "2740", "event_id": "0000040075"}
+
+    def test_a_listed_target_is_reported_active(self) -> None:
+        events = [{"business_unit": "2740", "event_id": "0000040075"}]
+        state = assemble.target_listing_state(self.OPP, events)
+        self.assertTrue(state["listed_in_active_feed"])
+
+    def test_an_absent_target_is_flagged_with_what_it_does_and_does_not_mean(self) -> None:
+        # Cal eProcure drops an event at close, so "not listed" means closed or withdrawn,
+        # not that the documents are gone. Zero documents afterwards must not read as
+        # "this solicitation had no attachments".
+        state = assemble.target_listing_state(self.OPP, [{"business_unit": "2740",
+                                                          "event_id": "0000040001"}])
+        self.assertFalse(state["listed_in_active_feed"])
+        self.assertIn("no longer listed", state["note"].lower())
+        self.assertIn("documents may still", state["note"].lower())
+
+    def test_an_empty_feed_is_unknown_rather_than_absent(self) -> None:
+        # A failed feed fetch is not evidence the event closed.
+        state = assemble.target_listing_state(self.OPP, [])
+        self.assertIsNone(state["listed_in_active_feed"])
+
+
 class BidHistoryEnrichmentTests(unittest.TestCase):
     def test_win_rates_see_every_bidder_source_not_just_the_first(self) -> None:
         # Declaring one cache filename meant a second jurisdiction's bidders never reached

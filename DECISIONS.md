@@ -28,6 +28,15 @@ Two limits carried in the data, not just here: results are preliminary pending S
 licensing and bonding verification, so the low bidder is not yet the awardee; and Caltrans
 keeps roughly nine months, so a harvester must run continuously rather than backfill.
 
+**The demonstrated event has closed.** Cal eProcure lists open events only, so an event
+leaving the feed is the sole closure signal it gives — there is no status change to read.
+The DMV event used as the worked example dropped out of the feed on or before 2026-09-10,
+while its detail page and both attachments stayed retrievable by identifier. `analyze` now
+reports whether its target is still listed, because otherwise a later run returning no
+documents reads as "this solicitation had no attachments" rather than "the event is gone".
+The example is kept because its intent-to-award PDF is the only document in the corpus
+naming a bidder against a specific solicitation.
+
 **Vendor advertisements** are the remaining solicitation-specific signal: a `Prime Seeking
 Sub` post is a company declaring intent to bid on a named event. Reachable, not yet
 harvested, and classified `declared_interest` — never `known_bidder`, because the ad names a
@@ -117,6 +126,18 @@ Resolution is deliberately strict:
   real and distinct in this corpus.
 
 Unresolved rows stay in the review queue rather than being presented as matched.
+
+**City and state vendor populations are disjoint, and that is a product finding.** None of
+the San Francisco bidders appear in the state award registry — checked against SCPRS
+directly, not merely against the local corpus: Ronan Construction, A. Ruiz Construction,
+Precision Engineering, CLW Builders and Bauman Landscape return zero state award rows each.
+They are city contractors and do not sell to the state.
+
+So a city surface does not enrich the state picture, and no amount of name matching will
+make it. What it does is cover a separate market: local government is its own competitive
+universe with its own incumbents, and a SLED product needs a vendor universe per
+jurisdiction rather than one national list with cities folded in. Bidder observations are
+tagged by `source_key` and business unit so the two are never read as one pool.
 
 ---
 

@@ -330,3 +330,32 @@ def award_sweep_coverage(results: list[dict[str, Any]]) -> dict[str, Any]:
                  f"{reported - collected} row(s) the portal reported were not retrieved; "
                  f"narrow the window or pass a second subdivision axis"),
     }
+
+
+def target_listing_state(opportunity: dict[str, Any],
+                         events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Is the opportunity still listed as active, and what does the answer mean?
+
+    The Cal eProcure feed carries open events only and drops one the moment it closes, so
+    disappearance is the sole closure signal the portal gives. That makes absence worth
+    stating rather than passing over: an event that has left the feed still serves its
+    detail page and attachments, so a later run returning no documents means "gone" and
+    not "this solicitation had none". An empty feed is a failed fetch, which is not
+    evidence either way.
+    """
+    key = (opportunity.get("business_unit"), opportunity.get("event_id"))
+    if not events:
+        return {
+            "listed_in_active_feed": None,
+            "note": ("the active-event feed came back empty, so whether this opportunity "
+                     "is still listed is unknown; a failed fetch is not a closure signal"),
+        }
+    listed = any((e.get("business_unit"), e.get("event_id")) == key for e in events)
+    return {
+        "listed_in_active_feed": listed,
+        "note": ("listed in the active-event feed at analysis time" if listed else
+                 "no longer listed in the active-event feed, which is the only closure "
+                 "signal Cal eProcure gives — the event has closed or been withdrawn. Its "
+                 "documents may still be retrievable by identifier, so a zero-document "
+                 "result here means the event is gone, not that it carried no attachments"),
+    }

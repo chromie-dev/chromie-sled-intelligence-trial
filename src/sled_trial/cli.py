@@ -422,6 +422,10 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     print(f"        corpus now {len(manifest)} documents, {len(pages)} pages")
 
     # 3. Observed participants, from document tables only.
+    listing = assemble.target_listing_state(opportunity, events)
+    if listing["listed_in_active_feed"] is not True:
+        print(f"        NOTE: {listing['note']}")
+
     print("  [3/9] observed participants")
     known = assemble.observed_participants(_participants(pages), outdir)
     documents.write_jsonl(known, outdir / "participant_candidates.jsonl")
@@ -526,6 +530,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     intelligence = _opportunity_intelligence(
         opportunity, known=known, prediction=prediction,
         lineage_result=lineage_result, documents_manifest=manifest)
+    intelligence["target_listing"] = listing
     (outdir / "opportunity_intelligence.json").write_text(
         json.dumps(intelligence, indent=1, default=str))
     (outdir / "source_coverage.json").write_text(
