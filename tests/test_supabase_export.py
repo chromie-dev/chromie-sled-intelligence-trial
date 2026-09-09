@@ -252,3 +252,110 @@ class ParticipantRecordSourceTests(unittest.TestCase):
         expected = se.local_id("gov_procurement_records", "caleprocure_event_list",
                                "solicitation", "2660/08A3933")
         self.assertEqual(row["record_id"], expected)
+
+
+class ResolvedIdentityExportTests(unittest.TestCase):
+    def test_a_resolved_bidder_links_to_its_scprs_competitor(self) -> None:
+        # Otherwise the row never joins the gov_competitors profile built from that id, and
+        # the resolution work is discarded at the export boundary.
+        resolved = {"business_unit": "2660", "event_id": "08A3933",
+                    "vendor_name_raw": "Apex Waste Systems Inc.",
+                    "supplier_id": "0000011589", "identity_confidence": "medium",
+                    "source_key": "caltrans_bid_results"}
+        row = se.participant_rows([resolved], [])[0]
+        self.assertEqual(row["identity_confidence"], "medium")
+        self.assertEqual(row["competitor_id"],
+                         se.local_id("gov_competitors", "caleprocure_scprs", "0000011589"))
+
+    def test_an_unresolved_bidder_still_reads_as_unresolved(self) -> None:
+        row = se.participant_rows([{"business_unit": "2660", "event_id": "08A3933",
+                                    "vendor_name_raw": "Nobody Inc."}], [])[0]
+        self.assertEqual(row["identity_confidence"], "unresolved")
+
+
+class PartnerMatchRecordTests(unittest.TestCase):
+    def test_the_payload_points_at_the_solicitation_record_that_exists(self) -> None:
+        # event_ref only exists on holdout evaluation events, so a real opportunity fell
+        # back to the department name and keyed off a record nothing emits.
+        opportunity = {"business_unit": "2740", "event_id": "0000040075",
+                       "department": "Department of Motor Vehicles"}
+        row = se.partner_match_rows([{"opportunity": opportunity,
+                                      "prime_candidates": []}])[0]
+        expected = se.local_id("gov_procurement_records", "caleprocure_event_list",
+                               "solicitation", "2740/0000040075")
+        self.assertEqual(row["record_id"], expected)
+        self.assertEqual(row["record_id"],
+                         se.event_record_rows([opportunity])[0]["id"])
+
+    def test_the_analysed_opportunity_gets_a_record_even_when_it_has_closed(self) -> None:
+        # Records are seeded from the active feed, which drops an event at close. The
+        # opportunity under analysis must still have a solicitation row, or the partner
+        # payload and its participants reference something that was never written.
+        opportunity = {"business_unit": "2740", "event_id": "0000040075",
+                       "department": "Department of Motor Vehicles"}
+        rows = se.event_record_rows([{"business_unit": "2660", "event_id": "08A3933"}],
+                                    target=opportunity)
+        ids = {r["id"] for r in rows}
+        self.assertIn(se.local_id("gov_procurement_records", "caleprocure_event_list",
+                                  "solicitation", "2740/0000040075"), ids)
+
+    def test_a_target_already_in_the_feed_is_not_duplicated(self) -> None:
+        opportunity = {"business_unit": "2740", "event_id": "0000040075"}
+        rows = se.event_record_rows([opportunity], target=opportunity)
+        self.assertEqual(len(rows), 1)
+
+
+class ParticipantRecordIntegrityTests(unittest.TestCase):
+    """Every participant must point at a solicitation record that is actually emitted."""
+
+    CALTRANS = {"business_unit": "2660", "event_id": "08A3933",
+                "vendor_name_raw": "Apex Waste Systems Inc.",
+                "source_key": "caltrans_bid_results"}
+    SF = {"business_unit": "SFPW", "event_id": "0000007165",
+          "vendor_name_raw": "Ronan Construction",
+          "source_key": "sfpublicworks_bid_tabulation"}
+
+    def test_harvested_solicitations_get_their_own_records(self) -> None:
+        # Bidder harvests name solicitations the active feed never carried, so without
+        # this every harvested participant is a dangling reference.
+        records = se.event_record_rows([], target=None,
+                                       participants=[self.CALTRANS, self.SF])
+        ids = {r["id"] for r in records}
+        for candidate in (self.CALTRANS, self.SF):
+            with self.subTest(source=candidate["source_key"]):
+                row = se.participant_rows([candidate], [])[0]
+                self.assertIn(row["record_id"], ids)
+
+    def test_a_city_solicitation_is_recorded_under_its_own_source(self) -> None:
+        records = se.event_record_rows([], target=None, participants=[self.SF])
+        self.assertEqual(records[0]["source_key"], "sfpublicworks_bid_tabulation")
+
+    def test_no_duplicate_record_for_a_solicitation_already_in_the_feed(self) -> None:
+        feed = [{"business_unit": "2660", "event_id": "08A3933"}]
+        records = se.event_record_rows(feed, target=None, participants=[self.CALTRANS])
+        self.assertEqual(len(records), 1)
+
+
+class ReferentialIntegrityTests(unittest.TestCase):
+    """Ordering was already enforced; existence was not, and that is where rows dangled."""
+
+    def test_no_participant_or_payload_references_a_record_that_is_not_emitted(self) -> None:
+        target = {"business_unit": "2740", "event_id": "0000040075",
+                  "department": "Department of Motor Vehicles"}
+        participants = [
+            {"business_unit": "2660", "event_id": "08A3933", "vendor_name_raw": "Apex",
+             "source_key": "caltrans_bid_results"},
+            {"business_unit": "SFPW", "event_id": "0000007165",
+             "vendor_name_raw": "Ronan", "source_key": "sfpublicworks_bid_tabulation"},
+            {"business_unit": "2740", "event_id": "0000040075", "vendor_name_raw": "Aviate"},
+        ]
+        # A feed that carries none of them, which is the state after an event closes.
+        records = se.event_record_rows([], target=target, participants=participants)
+        emitted = {r["id"] for r in records}
+
+        for row in se.participant_rows(participants, []):
+            with self.subTest(vendor=row["competitor_id"]):
+                self.assertIn(row["record_id"], emitted)
+
+        payload = se.partner_match_rows([{"opportunity": target, "prime_candidates": []}])[0]
+        self.assertIn(payload["record_id"], emitted)

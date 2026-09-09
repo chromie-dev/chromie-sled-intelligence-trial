@@ -366,6 +366,56 @@ class BidHistoryEnrichmentTests(unittest.TestCase):
         self.assertIsNone(payload)
 
 
+class ObservedOnThisEventTests(unittest.TestCase):
+    """Only bidders on the target solicitation count as already observed on it."""
+
+    OPP = {"business_unit": "2740", "event_id": "0000040075"}
+
+    def test_a_bidder_from_another_solicitation_is_not_excluded(self) -> None:
+        # `known` now holds every harvested bidder from every event. Treating all of them
+        # as observed here drops legitimate candidates from this opportunity's ranking.
+        known = [{"business_unit": "2660", "event_id": "08A3933",
+                  "vendor_name_raw": "Apex Waste Systems Inc.", "supplier_id": "V1"}]
+        profiles = [{"supplier_id": "V1", "canonical_name": "APEX WASTE SYSTEMS INC"}]
+        self.assertEqual(assemble.observed_vendor_ids(self.OPP, known, profiles), set())
+
+    def test_a_bidder_on_this_event_is_excluded(self) -> None:
+        known = [{"business_unit": "2740", "event_id": "0000040075",
+                  "vendor_name_raw": "AVIATE ENTERPRISES, INC.", "supplier_id": "V2"}]
+        profiles = [{"supplier_id": "V2", "canonical_name": "AVIATE ENTERPRISES INC"}]
+        self.assertEqual(assemble.observed_vendor_ids(self.OPP, known, profiles), {"V2"})
+
+    def test_a_resolved_id_is_used_directly(self) -> None:
+        known = [{"business_unit": "2740", "event_id": "0000040075",
+                  "vendor_name_raw": "spelled differently", "supplier_id": "V3"}]
+        profiles = [{"supplier_id": "V3", "canonical_name": "SOMETHING ELSE"}]
+        self.assertEqual(assemble.observed_vendor_ids(self.OPP, known, profiles), {"V3"})
+
+    def test_an_unresolved_name_matches_on_normalised_equality_not_substring(self) -> None:
+        # "ACME" inside "ACME WIDGETS OF NEVADA" is not the same company.
+        known = [{"business_unit": "2740", "event_id": "0000040075",
+                  "vendor_name_raw": "ACME"}]
+        profiles = [{"supplier_id": "V4", "canonical_name": "ACME WIDGETS OF NEVADA"},
+                    {"supplier_id": "V5", "canonical_name": "Acme, Inc."}]
+        self.assertEqual(assemble.observed_vendor_ids(self.OPP, known, profiles), {"V5"})
+
+
+class ReviewQueueResolutionTests(unittest.TestCase):
+    def test_a_resolved_participant_is_not_queued_as_unresolved(self) -> None:
+        rows = assemble.unresolved_identity_review([
+            {"vendor_name_raw": "A", "supplier_id": "0000011589",
+             "identity_confidence": "medium"},
+            {"vendor_name_raw": "B"},
+        ])
+        self.assertEqual([r["vendor_name_raw"] for r in rows], ["B"])
+
+    def test_an_ambiguous_participant_is_still_queued(self) -> None:
+        rows = assemble.unresolved_identity_review([
+            {"vendor_name_raw": "C", "identity_confidence": "ambiguous",
+             "candidate_supplier_ids": ["1", "2"]}])
+        self.assertEqual(len(rows), 1)
+
+
 class BidderSourceRegistryTests(unittest.TestCase):
     """Adding a jurisdiction should mean adding a registry row, not editing four files."""
 

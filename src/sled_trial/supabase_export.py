@@ -306,15 +306,52 @@ def source_rows(registry_csv: str | pathlib.Path = "sources/source_registry.csv"
     return out
 
 
-def event_record_rows(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Cal eProcure solicitation events -> gov_procurement_records."""
+DEFAULT_RECORD_SOURCE = "caleprocure_event_list"
+
+
+def event_record_rows(events: Iterable[dict[str, Any]],
+                      target: dict[str, Any] | None = None,
+                      participants: Iterable[dict[str, Any]] = (),
+                      ) -> list[dict[str, Any]]:
+    """Solicitation records for every event this run refers to.
+
+    Three inputs, because three things can name a solicitation and only one of them is the
+    active feed:
+
+    * `events` — the feed, which lists open events only.
+    * `target` — the opportunity under analysis. The feed drops an event at close, so
+      analysing a closed one would leave its partner payload pointing at nothing.
+    * `participants` — observed bidders. A harvested bidder field names solicitations the
+      feed never carried, in Caltrans' case long closed and in San Francisco's case never
+      state events at all. Without a record each of those participants dangles.
+
+    Each record is attributed to the registry that actually lists it, which is why a city
+    solicitation does not claim to be a Cal eProcure event.
+    """
+    events = [dict(e, _source=DEFAULT_RECORD_SOURCE) for e in events]
+    seen = {(e.get("business_unit"), e.get("event_id")) for e in events}
+
+    def add(row: dict[str, Any], source: str) -> None:
+        key = (row.get("business_unit"), row.get("event_id"))
+        if not all(key) or key in seen:
+            return
+        seen.add(key)
+        events.append(dict(row, _source=source))
+
+    if target:
+        add(target, DEFAULT_RECORD_SOURCE)
+    for candidate in participants:
+        declared = sources.BY_KEY.get(candidate.get("source_key") or "")
+        add(candidate, declared.record_source if declared else DEFAULT_RECORD_SOURCE)
+
     out = []
     for event in events:
+        source = event.get("_source", DEFAULT_RECORD_SOURCE)
         external = f"{event.get('business_unit')}/{event.get('event_id')}"
         out.append({
-            "id": local_id("gov_procurement_records", "caleprocure_event_list",
-                           "solicitation", external),
-            "source_ref": local_id("gov_procurement_sources", "caleprocure_event_list"),
+            "id": local_id("gov_procurement_records", source, "solicitation", external),
+            "source_ref": local_id("gov_procurement_sources", source),
+            "source_key": source,
             "record_type": "solicitation",
             "external_id": external,
             "jurisdiction": "California",
@@ -434,10 +471,14 @@ def participant_rows(observed: Iterable[dict[str, Any]],
         record_source = declared.record_source if declared else "caleprocure_event_list"
         record_id = local_id("gov_procurement_records", record_source,
                              "solicitation", external)
-        # Identity is unresolved until the extracted name matches an SCPRS supplier_id, so
-        # the competitor id is derived from the raw name and marked accordingly.
-        competitor_id = local_id("gov_competitors", "document_extracted",
-                                 candidate.get("vendor_name_raw"))
+        # A resolved row links to the same competitor the award rows build, so the bidder
+        # evidence joins the profile made from that supplier_id. Without one the identity
+        # is still open and the competitor is derived from the raw name instead.
+        supplier_id = (candidate.get("supplier_id") or "").strip()
+        competitor_id = (local_id("gov_competitors", "caleprocure_scprs", supplier_id)
+                         if supplier_id else
+                         local_id("gov_competitors", "document_extracted",
+                                  candidate.get("vendor_name_raw")))
         out.append({
             "id": local_id("gov_procurement_participants", record_id, competitor_id,
                            "known_bidder"),
@@ -450,7 +491,8 @@ def participant_rows(observed: Iterable[dict[str, Any]],
                                  if candidate.get("amount_numeric") else None),
             "submitted_amount_raw": candidate.get("amount_raw"),
             "score": None,
-            "identity_confidence": "unresolved",
+            "identity_confidence": (candidate.get("identity_confidence") or "unresolved"
+                                    if supplier_id else "unresolved"),
             "evidence_class": "observed",
             "evidence": {"source_key": candidate.get("source_key")
                                        or "caleprocure_event_package",
@@ -521,7 +563,13 @@ def partner_match_rows(prime_results: Iterable[dict[str, Any]]) -> list[dict[str
     out = []
     for result in prime_results:
         opportunity = result.get("opportunity", {})
-        external = opportunity.get("event_ref") or opportunity.get("department") or "unknown"
+        # Same key `event_record_rows` emits. `event_ref` exists only on holdout evaluation
+        # events, so a real opportunity fell through to the department name and pointed the
+        # payload at a solicitation record nothing had written.
+        bu, eid = opportunity.get("business_unit"), opportunity.get("event_id")
+        external = (f"{bu}/{eid}" if bu and eid else
+                    opportunity.get("event_ref") or opportunity.get("department")
+                    or "unknown")
         record_id = local_id("gov_procurement_records", "caleprocure_event_list",
                              "solicitation", external)
         candidates = result.get("prime_candidates", [])

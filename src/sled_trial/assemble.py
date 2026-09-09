@@ -13,6 +13,7 @@ import pathlib
 from typing import Any, Iterable
 
 from . import documents, extract, sources
+from .vendors import normalize_name
 
 def _participants(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Candidate participants, each carrying the document and page that support it.
@@ -245,13 +246,38 @@ def observed_participants(document_candidates: list[dict[str, Any]],
     return rows
 
 
+def observed_vendor_ids(opportunity: dict[str, Any], known: Iterable[dict[str, Any]],
+                        profiles: Iterable[dict[str, Any]]) -> set[str]:
+    """Vendors already named as bidders **on this solicitation**, excluded from ranking.
+
+    Scoped to the target event on purpose. `known` now carries every harvested bidder from
+    every event, and treating all of them as observed here would drop legitimate candidates
+    from this opportunity's ranking because they bid on an unrelated one.
+
+    A resolved `supplier_id` is used directly. Without one the fallback is exact equality
+    of the normalised name, never a substring: "ACME" appears inside "ACME WIDGETS OF
+    NEVADA" and they are different companies.
+    """
+    target = (opportunity.get("business_unit"), opportunity.get("event_id"))
+    here = [row for row in known
+            if (row.get("business_unit"), row.get("event_id")) == target]
+    ids = {row["supplier_id"] for row in here if row.get("supplier_id")}
+    unresolved = {normalize_name(row.get("vendor_name_raw") or "")
+                  for row in here if not row.get("supplier_id")}
+    unresolved.discard("")
+    ids |= {p["supplier_id"] for p in profiles
+            if normalize_name(p.get("canonical_name") or "") in unresolved
+            and p.get("supplier_id")}
+    return ids
+
+
 def unresolved_identity_review(known: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Review rows for observed participants whose vendor identity is not yet resolved.
 
-    Observed participants arrive in two shapes: extracted from a document page, and read
-    off a Caltrans bid-results row that cites a URL rather than a filename. Indexing a
-    filename on every candidate crashed the run when the second shape appeared, so the
-    citation is whichever the row actually carries.
+    A row that already carries a `supplier_id` has been resolved and does not belong in the
+    queue; an ambiguous one does, because two suppliers normalising to one name is exactly
+    what a person needs to arbitrate. Citation is a filename or a URL depending on which
+    surface the row came from.
     """
     return [{
         "type": "unresolved_participant_identity",
@@ -260,7 +286,7 @@ def unresolved_identity_review(known: Iterable[dict[str, Any]]) -> list[dict[str
         "citation": row.get("displayed_filename") or row.get("evidence_url"),
         "page": row.get("page"),
         "action": "match against an SCPRS supplier_id before treating as resolved",
-    } for row in known]
+    } for row in known if not row.get("supplier_id")]
 
 
 def profile_corpus(awards: list[dict[str, Any]],

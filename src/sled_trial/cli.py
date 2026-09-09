@@ -500,9 +500,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         joined = attach(profiles, payload)
         print(f"        {attach_name}: {joined['matched']} of {joined['profiles']} profiles")
     (outdir / "vendor_profiles.json").write_text(json.dumps(profiles, indent=1, default=str))
-    observed_ids = {p["supplier_id"] for p in profiles
-                    if any(k["vendor_name_raw"].lower() in (p.get("canonical_name") or "").lower()
-                           for k in known)}
+    observed_ids = assemble.observed_vendor_ids(opportunity, known, profiles)
     prediction = predict.rank_candidates(awards, opportunity, cutoff=cutoff, top_n=10,
                                          observed_vendor_ids=observed_ids)
 
@@ -560,7 +558,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     print("  [9/9] supabase fixtures and report")
     tables = {
         "gov_procurement_sources": se.source_rows(),
-        "gov_procurement_records": (se.event_record_rows(events)
+        "gov_procurement_records": (se.event_record_rows(events, target=opportunity, participants=known)
                                     + se.award_record_rows(awards)),
         "gov_procurement_participants": se.participant_rows(known, awards),
         "gov_procurement_documents": se.document_rows(manifest),
