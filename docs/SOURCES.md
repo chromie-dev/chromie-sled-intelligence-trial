@@ -87,6 +87,18 @@ cost a day to find and is the single most useful thing in this document.
 - Verified: 2026-09-09
 - **Gaps and caveats:** Caltrans only, so no coverage of the other 278 events in the feed. Results are PRELIMINARY, pending SB/DVBE, licensing and bonding verification, so the low bidder is not necessarily the awardee. No supplier_id on the page, so identity resolution is a name match. Unpublished weeks answer HTTP 200 with an empty template rather than 404
 
+### Bid tabulations attached to commission award items
+
+- Endpoint we call: `https://sfpublicworks.org/about/public-works-commission-calendar`
+- Provides: bidders
+- Access: document (PDF attachment discovered from commission pages)
+- Login required: no
+- When it becomes public: when the award item is posted; the tabulation starts the five-working-day protest period
+- History available: as far back as commission pages are linked; 29 meeting folders referenced from the calendar
+- Stable identifiers: SF sourcing id (e.g. 0000007165). NOT a Cal eProcure event: SF is a city and absent from the state portal, so there is no state join
+- Verified: 2026-09-09
+- **Gaps and caveats:** Discovery is the weak point: the calendar links mostly minutes and agendas, so a full backfill needs meeting-page URLs supplied. Bidders are listed in the order opened, NOT by price, so rank is derived from amount. A tabulation precedes responsibility review, so the low bidder is not yet the awardee. SF vendors carry no state supplier_id, so identity cannot resolve against SCPRS
+
 
 ## Verified, not yet wired in
 

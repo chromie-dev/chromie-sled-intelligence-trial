@@ -66,7 +66,16 @@ python -m sled_trial.cli analyze \
 
 Read [data/examples/active_opportunity.json](file:///Users/pookie/chromie-sled-intelligence-trial/data/examples/active_opportunity.json) first: it is the input file and is commented. As the command executes, watch the nine logged stages. That sequence represents the execution architecture.
 
-Two commands sit outside `analyze` on purpose. `evaluate` regenerates `build/evaluation.json`, so the headline precision figure can be reproduced without a live crawl. `backfill-primes` deepens award history for the prime-eligible vendor set; without it the date sweep leaves the median vendor holding one award and the teaming section comes out empty.
+Four commands sit outside `analyze` on purpose, each expensive in a different way:
+
+| Command | Why it is separate |
+| --- | --- |
+| `evaluate` | Reproduces the headline precision figure with no live crawl. |
+| `backfill-primes` | Deepens award history for the prime-eligible set; without it the sweep leaves the median vendor holding one award and the teaming section is empty. |
+| `bidders --resolve` | Harvests Caltrans bid results and resolves each bidder name to an SCPRS `supplier_id`, which is what populates win rates. |
+| `tabulations` | Harvests SF Public Works bid tabulations; `--page` is repeatable because the meeting pages holding them are not indexed anywhere. |
+
+`analyze` consumes whatever these have written and says which corpus it used.
 
 ---
 
@@ -77,6 +86,7 @@ Read modules in execution order rather than alphabetical order:
 | Stage | Module | Lines | Writes |
 | --- | --- | ---: | --- |
 | 1: Reach the portal | [sources/caleprocure.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/sources/caleprocure.py) | 457 | `events.jsonl` |
+| 1: Bidder fields (the only CA sources naming losers) | [sources/caltrans.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/sources/caltrans.py) + [sources/sfpublicworks.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/sources/sfpublicworks.py) | 189 + 221 | `caltrans_bidders.jsonl`, `sf_bidders.jsonl` |
 | 2: Validate and store documents | [documents.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/documents.py) | 222 | `documents_manifest.jsonl` |
 | 2: Read documents | [extract.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/extract.py) | 395 | `document_pages.jsonl`, `participant_candidates.jsonl` |
 | 4: Award history | [sources/scprs.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/sources/scprs.py) | 204 | `awards.jsonl` |

@@ -57,6 +57,8 @@ award registry, which is the fast path when only the analysis changed.
 | `documents --event BU/EVENT_ID` | Download and extract one or more events | yes |
 | `spending --max-mb 600` | Cache Open FI$Cal payment records | yes, hundreds of MB |
 | `backfill-primes --opportunity FILE` | Deepen award history for the prime-eligible vendor set | yes |
+| `bidders --resolve` | Harvest Caltrans weekly bid results and resolve names to SCPRS ids | yes |
+| `tabulations --page URL` | Harvest SF Public Works bid tabulations | yes |
 | `evaluate` | Regenerate `build/evaluation.json` from the cached corpus | no |
 | `analyze --opportunity FILE` | The deliverable above | yes |
 
@@ -69,6 +71,20 @@ python -m sled_trial.cli evaluate --output build
 # history 836 rows, 55 held-out events at 09/03/2026
 # precision@3 0.0727 | precision@5 0.0582 | coverage 0.1918 | lift 1.2x
 ```
+
+`bidders` and `tabulations` are the two sources that name **losing** bidders, which
+Cal eProcure does not publish at all:
+
+```bash
+python -m sled_trial.cli bidders --weeks 12 --resolve --output build
+python -m sled_trial.cli tabulations --page https://sfpublicworks.org/node/35557 --output build
+```
+
+`--resolve` takes each bidder name to SCPRS for a `supplier_id`; the same query returns
+that vendor's awards, so profiles get the history that makes a win rate computable.
+`tabulations` takes `--page` repeatedly because SF's commission calendar links mostly
+minutes and agendas — the attachments holding tabulations hang off individual meeting
+pages, which the site does not index in one place.
 
 `backfill-primes` matters for one specific reason. A date sweep leaves the median vendor
 holding a single award, so almost nobody clears the prime-qualification rule and the

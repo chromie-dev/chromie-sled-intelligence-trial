@@ -1925,3 +1925,81 @@ anything.
    subcontractor path. The next thing worth building.
 3. **Board-agenda tabulations** — reachable but scanned, needs the OCR fallback.
 4. **PlanetBids** — largest agency coverage, closed to automation without permission.
+
+## 2026-09-09 — SF Public Works adapter, and bidder identity resolved against SCPRS
+
+Two additions, both following from the probe above: a second source that names losing
+bidders, and the step that turns a company name on a page into a vendor the rest of the
+pipeline already knows.
+
+### SF Public Works: a second bidder source, with a trap the first one does not have
+
+`sources/sfpublicworks.py` reads the `TABULATION OF BIDS` attachment that accompanies every
+contract award going to the Public Works Commission. Measured on a live run across three
+commission pages: 99 PDFs linked, 15 worth opening, **4 tabulations, 21 bidder
+observations, and all four name more than one bidder.**
+
+It also carries an **engineer's estimate**, which Caltrans does not. That is the agency's
+own expectation of the price, so a field can now be described as coming in under or over
+what the buyer budgeted rather than only relative to each other.
+
+**The trap: San Francisco lists bidders in the order their envelopes were opened, not by
+price.** Measured on Pavement Renovation No. 78, six bidders in listed order read $7.66M,
+$6.56M, $6.69M, $6.60M, $8.11M, $7.30M. Reading rank off list position would have named
+R&S Construction the apparent low bidder when Ronan Construction was $1.1M cheaper. Rank is
+therefore derived by sorting on amount, and the page's own ordering is kept separately as
+`listed_position` because it is the only ordering the document actually asserts. This is
+the opposite of Caltrans, whose ordered list *is* the rank, and the two adapters say so in
+their docstrings so the difference cannot be assumed away.
+
+**No state join exists.** San Francisco is a city and does not appear in Cal eProcure, so
+these rows carry `business_unit: "SFPW"` and SF's own sourcing id. `participant_rows` now
+derives the solicitation record's source from the candidate rather than assuming
+`caleprocure_event_list`; hanging an SF sourcing id off the state event list would have
+asserted a record that does not exist.
+
+**Discovery is the weak point, and it is a site limitation rather than a parsing one.** The
+commission calendar links mostly minutes and agendas; the attachment carrying a tabulation
+hangs off the individual meeting page, and those are `/node/<id>` URLs the site does not
+index anywhere. So `--page` is repeatable and defaults to the calendar. A full backfill
+needs the meeting URLs supplied, which is worth saying plainly rather than reporting the
+calendar-only yield as the source's ceiling.
+
+### Bidder identity resolution
+
+`vendors.resolve_bidder_identities` takes each distinct bidder name to SCPRS and attaches a
+`supplier_id`. One query does double duty: the same search that identifies a vendor returns
+that vendor's award rows, so the profile backfill costs nothing extra and comes back as
+`awards_seen`.
+
+The rule is strict on purpose. Exactly one supplier matching after normalisation resolves
+the row, at `medium` and never `high` — it is still a name comparison. More than one leaves
+the row `ambiguous` with the candidates recorded, because two suppliers can normalise to
+one name and be different companies. A near miss is not a match: "A Superior Sanitation"
+and "A Plus Superior Sanitation" are both real and distinct in this corpus, which is the
+argument against loosening it.
+
+`attach_bid_history` now matches on a resolved `supplier_id` first and falls back to the
+name only for rows that have none, so resolution is not wasted on a spelling difference.
+
+### Profiles may use the wider corpus; prediction may not
+
+Resolution produces `awards_bidder_enriched.jsonl`, and `assemble.profile_corpus` folds it
+into the corpus profiles are built from. Prediction keeps ranking on the sweep alone.
+
+That split is deliberate and now has a test that reads `cmd_analyze` and fails if
+`rank_candidates` is ever handed anything but `awards`. Profiles are descriptive — counts,
+agencies, amount ranges, one vendor at a time — so deeper history makes them more accurate.
+Ranking is the opposite: enriching a subset reorders it, which is the measured effect that
+invalidated the 0.17 precision figure and the 19 prime candidates. Same data, opposite
+consequence, so the two corpora stay apart.
+
+### A second latent crash of the same shape
+
+`cmd_tabulations` called `extract.extract_pages` while `cli.py` no longer imported
+`extract` — the module had been trimmed from the import when assembly moved out. Tests
+passed, because no test exercises a network command. That is the second bug in this
+session that only a live run could catch, after the one where every observed participant
+was assumed to carry a filename. Worth recording as a pattern: the CLI's network commands
+have no test coverage by construction, so each one has to be run once before it is
+believed.
