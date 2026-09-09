@@ -1,11 +1,5 @@
 """Supabase-shaped exports and their sanitized data contracts.
 
-These schemas are a **proposed contract**, authored from README's Chromie pattern table.
-The trial author confirmed on 2026-09-08 that no separate snapshot is coming, and asked that
-the files be clearly labelled as proposed with no claim of production compatibility.
-Validating against them proves internal consistency of the trial's own outputs and nothing
-more. Assumptions and validation gaps are documented in `docs/supabase_mapping.md`.
-
 Identifiers are deterministic UUIDv5 values derived from natural keys, so relationships are
 testable without production identifiers and a re-run produces byte-identical ids. No script
 here points at or writes to any Supabase instance.
@@ -431,7 +425,13 @@ def participant_rows(observed: Iterable[dict[str, Any]],
         })
     for candidate in observed:
         external = f"{candidate.get('business_unit')}/{candidate.get('event_id')}"
-        record_id = local_id("gov_procurement_records", "caleprocure_event_list",
+        # The solicitation record belongs to whichever registry actually lists it. San
+        # Francisco has no Cal eProcure event, so hanging its sourcing id off the state
+        # event list would assert a record that does not exist.
+        record_source = ("sfpublicworks_bid_tabulation"
+                         if candidate.get("source_key") == "sfpublicworks_bid_tabulation"
+                         else "caleprocure_event_list")
+        record_id = local_id("gov_procurement_records", record_source,
                              "solicitation", external)
         # Identity is unresolved until the extracted name matches an SCPRS supplier_id, so
         # the competitor id is derived from the raw name and marked accordingly.

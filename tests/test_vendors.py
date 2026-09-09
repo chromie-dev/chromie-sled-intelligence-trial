@@ -263,9 +263,126 @@ class BidHistoryTests(unittest.TestCase):
         vendors.attach_bid_history([profile], [bid(event="A1"), bid(event="A1")])
         self.assertEqual(profile["bids_observed"], 1)
 
+    def test_a_resolved_row_matches_on_supplier_id_not_on_spelling(self) -> None:
+        # Resolution exists precisely so a differently-spelled name still lands on the
+        # right vendor; falling back to the name here would waste it.
+        profile = self._profile()
+        vendors.attach_bid_history([profile], [
+            dict(bid(name="TECH INTEGRATION GRP", event="A1", rank=1),
+                 supplier_id="0000000269", identity_confidence="medium")])
+        self.assertEqual(profile["bids_observed"], 1)
+        self.assertEqual(profile["win_rate"], 1.0)
+        self.assertEqual(profile["win_rate_basis"]["identity_confidence"], "medium")
+
+    def test_a_resolved_row_for_another_vendor_does_not_attach(self) -> None:
+        profile = self._profile()
+        vendors.attach_bid_history([profile], [
+            dict(bid(name="TECHNOLOGY INTEGRATION GROUP", event="A1"),
+                 supplier_id="0000999999", identity_confidence="medium")])
+        self.assertIsNone(profile["win_rate"])
+
+    def test_the_weakest_identity_in_the_set_caps_the_confidence(self) -> None:
+        # Ranked explicitly, not alphabetically: sorted() puts "unresolved" last and would
+        # report the shakiest possible match as the strongest.
+        profile = self._profile()
+        vendors.attach_bid_history([profile], [
+            dict(bid(event="A1"), identity_confidence="medium"),
+            dict(bid(event="A2"), identity_confidence="unresolved"),
+        ])
+        self.assertEqual(profile["win_rate_basis"]["identity_confidence"], "unresolved")
+
+    def test_a_rate_from_one_or_two_bids_is_flagged_as_a_small_sample(self) -> None:
+        profile = self._profile()
+        vendors.attach_bid_history([profile], [bid(event="A1", rank=1)])
+        self.assertTrue(profile["win_rate_basis"]["small_sample"])
+
+    def test_a_deeper_sample_is_not_flagged(self) -> None:
+        profile = self._profile()
+        vendors.attach_bid_history([profile], [
+            bid(event=f"A{n}", rank=1 if n == 1 else 2) for n in range(1, 5)])
+        self.assertFalse(profile["win_rate_basis"]["small_sample"])
+
     def test_the_join_reports_how_many_profiles_matched(self) -> None:
         profile = self._profile()
         summary = vendors.attach_bid_history([profile], [bid()])
         self.assertEqual(summary["matched"], 1)
         self.assertEqual(summary["profiles"], 1)
         self.assertEqual(summary["bid_rows"], 1)
+
+
+class ResolveBidderIdentityTests(unittest.TestCase):
+    """A company name from a bid-results page is not an identity until SCPRS confirms it."""
+
+    def _lookup(self, table):
+        def lookup(name):
+            return table.get(vendors.normalize_name(name), [])
+        return lookup
+
+    def test_a_single_matching_supplier_resolves_the_row(self) -> None:
+        rows = [{"vendor_name_raw": "Granite Construction Company"}]
+        summary = vendors.resolve_bidder_identities(rows, self._lookup({
+            "granite construction": [
+                award(supplier_id="0000011589", supplier_name="GRANITE CONSTRUCTION COMPANY")],
+        }))
+        self.assertEqual(rows[0]["supplier_id"], "0000011589")
+        self.assertEqual(rows[0]["identity_confidence"], "medium")
+        self.assertEqual(summary["resolved"], 1)
+
+    def test_two_suppliers_under_one_name_stay_unresolved(self) -> None:
+        # Merging unrelated companies is worse than leaving a row unresolved -- the same
+        # rule detect_identity_conflicts already applies.
+        rows = [{"vendor_name_raw": "Granite Construction"}]
+        summary = vendors.resolve_bidder_identities(rows, self._lookup({
+            "granite construction": [
+                award(supplier_id="0000011589", supplier_name="GRANITE CONSTRUCTION COMPANY"),
+                award(supplier_id="0000116332", supplier_name="GRANITE CONSTRUCTION INC")],
+        }))
+        self.assertIsNone(rows[0]["supplier_id"])
+        self.assertEqual(rows[0]["identity_confidence"], "ambiguous")
+        self.assertEqual(sorted(rows[0]["candidate_supplier_ids"]),
+                         ["0000011589", "0000116332"])
+        self.assertEqual(summary["ambiguous"], 1)
+
+    def test_a_name_absent_from_scprs_stays_unresolved(self) -> None:
+        rows = [{"vendor_name_raw": "Nobody At All Inc"}]
+        summary = vendors.resolve_bidder_identities(rows, self._lookup({}))
+        self.assertIsNone(rows[0]["supplier_id"])
+        self.assertEqual(rows[0]["identity_confidence"], "unresolved")
+        self.assertEqual(summary["unresolved"], 1)
+
+    def test_only_an_exact_normalised_match_counts(self) -> None:
+        # "A Superior Sanitation" against "A Plus Superior Sanitation" is a real pair of
+        # different companies observed in this data; a loose match would merge them.
+        rows = [{"vendor_name_raw": "A Superior Sanitation"}]
+        vendors.resolve_bidder_identities(rows, self._lookup({
+            "a plus superior sanitation": [
+                award(supplier_id="0000099999", supplier_name="A PLUS SUPERIOR SANITATION")],
+        }))
+        self.assertEqual(rows[0]["identity_confidence"], "unresolved")
+
+    def test_each_distinct_name_is_looked_up_once(self) -> None:
+        calls = []
+
+        def lookup(name):
+            calls.append(name)
+            return [award(supplier_id="0000011589", supplier_name="GRANITE CONSTRUCTION")]
+
+        rows = [{"vendor_name_raw": "Granite Construction"},
+                {"vendor_name_raw": "GRANITE CONSTRUCTION"},
+                {"vendor_name_raw": "Granite Construction"}]
+        vendors.resolve_bidder_identities(rows, lookup)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual({r["supplier_id"] for r in rows}, {"0000011589"})
+
+    def test_the_awards_seen_during_resolution_are_returned_for_reuse(self) -> None:
+        # The lookup that resolves a name also returns that vendor's award rows, so the
+        # backfill is free rather than a second pass over the registry.
+        rows = [{"vendor_name_raw": "Granite Construction"}]
+        summary = vendors.resolve_bidder_identities(rows, self._lookup({
+            "granite construction": [
+                award(supplier_id="0000011589", supplier_name="GRANITE CONSTRUCTION",
+                      purchase_doc="D1"),
+                award(supplier_id="0000011589", supplier_name="GRANITE CONSTRUCTION",
+                      purchase_doc="D2")],
+        }))
+        self.assertEqual(len(summary["awards_seen"]), 2)

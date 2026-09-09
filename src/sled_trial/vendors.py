@@ -21,7 +21,7 @@ import collections
 import datetime as dt
 import re
 import statistics
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from .sources import scprs
 
@@ -46,6 +46,11 @@ _LEGAL_SUFFIX = re.compile(
 _PUNCT = re.compile(r"[^a-z0-9 ]+")
 # openfiscal.match_confidence never returns "high": these files carry no supplier id.
 _CONFIDENCE_RANK = {"high": 3, "medium": 2, "low": 1}
+# Weakest first. Ranked explicitly because alphabetical order puts "unresolved" last and
+# would report the shakiest match in a set as the strongest.
+_IDENTITY_ORDER = ("unresolved", "ambiguous", "low", "medium", "high")
+# Below this a rate is arithmetic on a handful of events, not a track record.
+MIN_BIDS_FOR_A_STABLE_RATE = 3
 _WS = re.compile(r"\s+")
 
 
@@ -453,23 +458,34 @@ def attach_bid_history(profiles: list[dict[str, Any]],
     * The join is by normalised name, because bid-results pages carry no supplier id. That
       is the same low-confidence comparison `attach_spending` makes, and it can be wrong.
     """
+    # A row resolved to a supplier_id is indexed by it and by nothing else: resolution
+    # exists so a different spelling still lands on the right vendor, and falling back to
+    # the name for a resolved row would undo that and could attach it twice.
+    by_id: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
     by_name: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
     rows = list(bid_rows)
     for row in rows:
+        supplier_id = (row.get("supplier_id") or "").strip()
+        if supplier_id:
+            by_id[supplier_id].append(row)
+            continue
         key = normalize_name(row.get("vendor_name_raw") or "")
         if key:
             by_name[key].append(row)
 
     matched = 0
     for profile in profiles:
-        observed = by_name.get(normalize_name(profile.get("canonical_name") or ""))
+        observed = (by_id.get((profile.get("supplier_id") or "").strip())
+                    or by_name.get(normalize_name(profile.get("canonical_name") or "")))
         if not observed:
             continue
         matched += 1
         # One solicitation counts once even if the page lists a vendor twice.
         best: dict[tuple[Any, Any], int] = {}
         sources: set[str] = set()
+        confidences: set[str] = set()
         for row in observed:
+            confidences.add(row.get("identity_confidence") or "low")
             event = (row.get("business_unit"), row.get("event_id"))
             rank = row.get("rank")
             if rank is None:
@@ -485,14 +501,83 @@ def attach_bid_history(profiles: list[dict[str, Any]],
         profile["win_rate"] = round(wins / len(best), 4)
         profile["win_rate_note"] = (
             "computed over the subset of solicitations where a public source named the "
-            "full bidder field; not this vendor's overall win rate")
+            "full bidder field; not this vendor's overall win rate"
+            + (f". Only {len(best)} such solicitation(s) were observed, so this is a "
+               f"small sample rather than a track record."
+               if len(best) < MIN_BIDS_FOR_A_STABLE_RATE else ""))
         profile["win_rate_basis"] = {
             "source_keys": sorted(sources),
             "solicitations": [f"{bu}/{eid}" for bu, eid in sorted(best)],
-            "identity_confidence": "low",
-            "identity_basis": ("normalised company-name match: bid-results pages carry no "
-                               "supplier id, so this can attach the wrong company"),
+            # The weakest link decides: one unresolved row in the set caps the whole rate.
+            "identity_confidence": min(confidences or {"low"},
+                                       key=lambda c: (_IDENTITY_ORDER.index(c)
+                                                      if c in _IDENTITY_ORDER else 0)),
+            "small_sample": len(best) < MIN_BIDS_FOR_A_STABLE_RATE,
+            "identity_basis": ("matched on a resolved SCPRS supplier_id where one was "
+                               "found, otherwise on a normalised company-name comparison, "
+                               "which can attach the wrong company"),
             "evidence_class": "observed",
         }
     return {"matched": matched, "profiles": len(profiles),
             "bid_rows": len(rows), "vendors_in_bid_rows": len(by_name)}
+
+
+def resolve_bidder_identities(rows: list[dict[str, Any]],
+                              lookup: Callable[[str], list[dict[str, str]]],
+                              ) -> dict[str, Any]:
+    """Attach an SCPRS `supplier_id` to bidder rows in place. Returns a join summary.
+
+    A bid-results page gives a company name and no identifier, so every row arrives
+    unresolved. `lookup` takes a name and returns candidate SCPRS award rows -- the same
+    query supplies both the identity and that vendor's award history, so `awards_seen`
+    carries the rows back for reuse rather than making the caller sweep twice.
+
+    Resolution is deliberately strict:
+
+    * Exactly one supplier id whose name matches after normalisation -> resolved, at
+      `medium`. Never `high`: this is still a name comparison, and the page carries nothing
+      stronger to check it against.
+    * More than one -> `ambiguous`, id left null, candidates recorded. Two suppliers can
+      share a normalised name and be different companies, and merging them is worse than
+      leaving the row unresolved.
+    * A near miss is not a match. "A Superior Sanitation" and "A Plus Superior Sanitation"
+      are both real and distinct in this data, so only exact normalised equality counts.
+    """
+    cache: dict[str, tuple[str | None, list[str], list[dict[str, str]]]] = {}
+    awards_seen: list[dict[str, str]] = []
+    counts = collections.Counter()
+
+    for row in rows:
+        raw = row.get("vendor_name_raw") or ""
+        key = normalize_name(raw)
+        if key not in cache:
+            found = lookup(raw) if key else []
+            matching = [r for r in found
+                        if normalize_name(r.get("supplier_name") or "") == key]
+            ids = sorted({r["supplier_id"] for r in matching if r.get("supplier_id")})
+            cache[key] = (ids[0] if len(ids) == 1 else None, ids, matching)
+            awards_seen.extend(matching)
+        supplier_id, candidates, _ = cache[key]
+        row["supplier_id"] = supplier_id
+        row["candidate_supplier_ids"] = candidates
+        if supplier_id:
+            row["identity_confidence"] = "medium"
+            row["identity_basis"] = ("exact normalised name match to a single SCPRS "
+                                     "supplier_id; still a name comparison, never high")
+        elif candidates:
+            row["identity_confidence"] = "ambiguous"
+            row["identity_basis"] = (f"{len(candidates)} SCPRS suppliers normalise to this "
+                                     f"name; left unmerged pending review")
+        else:
+            row["identity_confidence"] = "unresolved"
+            row["identity_basis"] = "no SCPRS supplier matches this name after normalisation"
+        counts[row["identity_confidence"]] += 1
+
+    return {
+        "rows": len(rows),
+        "distinct_names": len(cache),
+        "resolved": counts["medium"],
+        "ambiguous": counts["ambiguous"],
+        "unresolved": counts["unresolved"],
+        "awards_seen": awards_seen,
+    }

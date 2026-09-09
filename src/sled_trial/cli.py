@@ -17,7 +17,7 @@ import pathlib
 import sys
 from typing import Any
 
-from . import assemble, documents
+from . import assemble, documents, extract
 from .assemble import (ENRICHMENTS, _opportunity_intelligence, _participants,
                        _read_jsonl, _source_coverage)
 from .sources import caleprocure as ca
@@ -195,7 +195,7 @@ def cmd_bidders(args: argparse.Namespace) -> int:
     """
     import datetime as dt
 
-    from .sources import caltrans
+    from .sources import caltrans, scprs
 
     outdir = pathlib.Path(args.output)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -207,6 +207,28 @@ def cmd_bidders(args: argparse.Namespace) -> int:
     result = caltrans.harvest(session, start, end)
     candidates = caltrans.bidder_candidates(result["solicitations"])
 
+    if args.resolve:
+        # One SCPRS name query returns both the supplier_id and that vendor's awards, so
+        # resolution and the profile backfill come out of the same pass.
+        from . import vendors
+
+        print(f"  resolving {len({c['vendor_name_raw'] for c in candidates})} distinct "
+              f"names against SCPRS")
+
+        def lookup(name: str) -> list[dict[str, str]]:
+            try:
+                return scprs.search(session, supplier_name=name)["rows"]
+            except Exception as exc:  # one bad name must not lose the harvest
+                print(f"    {name[:40]}: {type(exc).__name__}", file=sys.stderr)
+                return []
+
+        summary = vendors.resolve_bidder_identities(candidates, lookup)
+        documents.write_jsonl(summary["awards_seen"],
+                              outdir / "awards_bidder_enriched.jsonl")
+        print(f"  resolved {summary['resolved']} rows, {summary['ambiguous']} ambiguous, "
+              f"{summary['unresolved']} unresolved; "
+              f"{len(summary['awards_seen'])} award rows collected for profiles")
+
     documents.write_jsonl(candidates, outdir / "caltrans_bidders.jsonl")
     (outdir / "caltrans_bid_results.json").write_text(
         json.dumps(result, indent=1, default=str))
@@ -217,6 +239,53 @@ def cmd_bidders(args: argparse.Namespace) -> int:
           f"weeks never published: {len(result['weeks_absent'])}")
     print(f"  {len(solicitations)} solicitations, {len(candidates)} bidder observations")
     print(f"  {len(multi)} solicitations name more than one bidder, i.e. carry losers")
+    return 0
+
+
+def cmd_tabulations(args: argparse.Namespace) -> int:
+    """Harvest SF Public Works bid tabulations: a second source that names losing bidders.
+
+    San Francisco posts the whole field as a PDF attachment to the commission item that
+    awards the contract, with an engineer's estimate the Caltrans pages do not carry.
+    """
+    from .sources import sfpublicworks as sfpw
+
+    outdir = pathlib.Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    session = ca.CalEProcureSession(delay_seconds=args.delay)
+
+    # The calendar links only a slice of each meeting's papers; the attachment carrying a
+    # tabulation usually hangs off the meeting's own page, and those are /node/<id> URLs
+    # the site does not index in one place. So pages are an argument: default to the
+    # calendar, and let a caller point at meeting pages to go deeper.
+    pages = args.page or [sfpw.CALENDAR_URL]
+    links: list[str] = []
+    for page_url in pages:
+        body, _ = session.get(page_url)
+        links += sfpw.commission_pdf_links(body.decode("utf-8", "replace"))
+    links = sorted(set(links))
+    worth = [u for u in links if sfpw.likely_tabulation(u)][:args.limit]
+    print(f"{len(pages)} page(s), {len(links)} commission PDFs linked, "
+          f"{len(worth)} worth opening")
+
+    def read_pages(url: str) -> list[str]:
+        data, _ = session.get(url)
+        return [p.get("text") or "" for p in extract.extract_pages(
+            data, document_ref=url, sha256="", allow_ocr=not args.no_ocr)]
+
+    result = sfpw.harvest(worth, read_pages, max_pages=args.max_pages)
+    documents.write_jsonl(result["candidates"], outdir / "sf_bidders.jsonl")
+    (outdir / "sf_tabulations.json").write_text(
+        json.dumps({k: v for k, v in result.items() if k != "candidates"},
+                   indent=1, default=str))
+
+    multi = [t for t in result["tabulations"] if t["bidder_count"] > 1]
+    print(f"  read {result['documents_read']} documents, "
+          f"{result['documents_without_tabulation']} carried no tabulation, "
+          f"{len(result['failures'])} failed")
+    print(f"  {len(result['tabulations'])} tabulations, "
+          f"{len(result['candidates'])} bidder observations")
+    print(f"  {len(multi)} tabulations name more than one bidder, i.e. carry losers")
     return 0
 
 
@@ -396,7 +465,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
     # 6. Vendor profiles and prediction.
     print("  [6/9] vendor profiles and prediction")
-    profiles, review = vendors.build_profiles(awards)
+    # Profiles see the bidder backfill; prediction below keeps ranking on the sweep.
+    profile_awards = assemble.profile_corpus(awards, outdir)
+    if len(profile_awards) != len(awards):
+        print(f"        profile corpus {len(awards)} -> {len(profile_awards)} rows "
+              f"with the bidder backfill; prediction still ranks on the sweep")
+    profiles, review = vendors.build_profiles(profile_awards)
     # Attach cached spending. Rebuilding profiles from awards previously discarded the
     # spending enrichment entirely, so the command meant to produce the deliverable destroyed
     # part of it. The download lives in the `spending` subcommand; this only consumes it.
@@ -557,6 +631,19 @@ def build_parser() -> argparse.ArgumentParser:
                         help="harvest Caltrans weekly bid results (names losing bidders)")
     bd.add_argument("--weeks", type=int, default=12,
                     help="how many weeks back to walk; the site keeps roughly nine months")
+    tb = sub.add_parser("tabulations", parents=[common],
+                        help="harvest SF Public Works bid tabulations (names losing bidders)")
+    tb.add_argument("--limit", type=int, default=40,
+                    help="most commission PDFs to open in one run")
+    tb.add_argument("--page", action="append",
+                    help="page to discover PDFs from; repeatable, defaults to the "
+                         "commission calendar")
+    tb.add_argument("--max-pages", type=int, default=5,
+                    help="pages to search per document; a tabulation is front matter")
+
+    bd.add_argument("--resolve", action="store_true",
+                    help="resolve bidder names to SCPRS supplier ids and collect their "
+                         "awards, which is what populates win rates")
     return parser
 
 
@@ -564,7 +651,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     return {"events": cmd_events, "documents": cmd_documents, "analyze": cmd_analyze,
             "spending": cmd_spending, "evaluate": cmd_evaluate,
-            "backfill-primes": cmd_backfill_primes, "bidders": cmd_bidders}[
+            "backfill-primes": cmd_backfill_primes, "bidders": cmd_bidders,
+            "tabulations": cmd_tabulations}[
         args.command](args)
 
 

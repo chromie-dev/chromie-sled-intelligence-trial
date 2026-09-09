@@ -189,6 +189,21 @@ class CaltransBidderWiringTests(unittest.TestCase):
         self.assertIn("Apex Waste Systems Inc.",
                       [r["vendor_name_raw"] for r in merged])
 
+    def test_sf_tabulation_rows_are_merged_too(self) -> None:
+        # A second bidder source must not need a third merge path, or the next one gets
+        # written and forgotten the way awards_prime_enriched.jsonl was.
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = pathlib.Path(tmp)
+            (outdir / "caltrans_bidders.jsonl").write_text(json.dumps({
+                "business_unit": "2660", "event_id": "08A3933",
+                "vendor_name_raw": "Apex Waste Systems Inc."}) + "\n")
+            (outdir / "sf_bidders.jsonl").write_text(json.dumps({
+                "business_unit": "SFPW", "event_id": "0000007165",
+                "vendor_name_raw": "Ronan Construction"}) + "\n")
+            merged = assemble.observed_participants([], outdir)
+        self.assertEqual(sorted(r["vendor_name_raw"] for r in merged),
+                         ["Apex Waste Systems Inc.", "Ronan Construction"])
+
     def test_absent_cache_leaves_document_candidates_untouched(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             doc_candidate = {"business_unit": "2740", "event_id": "0000040075",
@@ -221,6 +236,45 @@ class ReviewQueueShapeTests(unittest.TestCase):
         self.assertEqual([r["citation"] for r in rows],
                          ["Intent_to_Award.pdf", "https://dot.ca.gov/x"])
         self.assertEqual(rows[1]["source_key"], "caltrans_bid_results")
+
+
+class ProfileCorpusTests(unittest.TestCase):
+    """Profiles may see the bidder backfill. Prediction must not."""
+
+    def _award(self, doc, sid="V1"):
+        return {"purchase_doc": doc, "supplier_id": sid, "supplier_name": "ACME",
+                "start_date": "09/01/2026"}
+
+    def test_the_bidder_backfill_is_folded_into_the_profile_corpus(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = pathlib.Path(tmp)
+            (outdir / "awards_bidder_enriched.jsonl").write_text(
+                json.dumps(self._award("D2", "V2")) + "\n")
+            corpus = assemble.profile_corpus([self._award("D1")], outdir)
+        self.assertEqual(len(corpus), 2)
+
+    def test_rows_already_in_the_sweep_are_not_duplicated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = pathlib.Path(tmp)
+            (outdir / "awards_bidder_enriched.jsonl").write_text(
+                json.dumps(self._award("D1")) + "\n")
+            corpus = assemble.profile_corpus([self._award("D1")], outdir)
+        self.assertEqual(len(corpus), 1)
+
+    def test_an_absent_backfill_leaves_the_sweep_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            corpus = assemble.profile_corpus([self._award("D1")], pathlib.Path(tmp))
+        self.assertEqual(len(corpus), 1)
+
+    def test_analyze_ranks_on_the_sweep_not_on_the_profile_corpus(self) -> None:
+        # Deepening a subset of vendors reorders a ranking -- measured, and it is why the
+        # 0.17 figure was discarded. Profiles are descriptive and may use the wider
+        # corpus; prediction may not, and this pins the two apart.
+        source = pathlib.Path("src/sled_trial/cli.py").read_text()
+        analyze = source[source.index("def cmd_analyze"):]
+        rank_call = analyze[analyze.index("predict.rank_candidates("):]
+        self.assertTrue(rank_call.startswith("predict.rank_candidates(awards,"),
+                        f"prediction must rank on the sweep: {rank_call[:80]}")
 
 
 if __name__ == "__main__":

@@ -226,3 +226,29 @@ class BidderRankTests(unittest.TestCase):
         row = next(r for r in se.participant_rows([candidate], []))
         self.assertIsNone(row["rank"])
         self.assertEqual(row["evidence"]["source_key"], "caleprocure_event_package")
+
+
+class ParticipantRecordSourceTests(unittest.TestCase):
+    def test_an_sf_bidder_is_not_attributed_to_a_cal_eprocure_solicitation(self) -> None:
+        # San Francisco has no Cal eProcure event. Hanging its sourcing id off the state
+        # event list would assert a record that does not exist.
+        sf = {"business_unit": "SFPW", "event_id": "0000007165",
+              "vendor_name_raw": "Ronan Construction", "amount_numeric": 6563340.0,
+              "source_key": "sfpublicworks_bid_tabulation"}
+        state = {"business_unit": "2660", "event_id": "08A3933",
+                 "vendor_name_raw": "Apex Waste Systems Inc.", "amount_numeric": 480480.0,
+                 "source_key": "caltrans_bid_results"}
+        rows = se.participant_rows([sf, state], [])
+        self.assertNotEqual(rows[0]["record_id"], rows[1]["record_id"])
+        expected = se.local_id("gov_procurement_records", "sfpublicworks_bid_tabulation",
+                               "solicitation", "SFPW/0000007165")
+        self.assertEqual(rows[0]["record_id"], expected)
+
+    def test_a_cal_eprocure_bidder_keeps_the_event_list_record(self) -> None:
+        state = {"business_unit": "2660", "event_id": "08A3933",
+                 "vendor_name_raw": "Apex Waste Systems Inc.",
+                 "source_key": "caltrans_bid_results"}
+        row = se.participant_rows([state], [])[0]
+        expected = se.local_id("gov_procurement_records", "caleprocure_event_list",
+                               "solicitation", "2660/08A3933")
+        self.assertEqual(row["record_id"], expected)

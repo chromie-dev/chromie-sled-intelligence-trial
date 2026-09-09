@@ -45,6 +45,11 @@ def _participants(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # adding a row here, and `test_cli.py` asserts every declared enrichment is applied.
 #
 #   (cache filename, key inside the cache or None for the whole file, attach function name)
+# Every harvested bidder source writes one of these. Adding a source means adding a row
+# here, so a second harvester cannot end up written and unread the way the prime-enrichment
+# corpus did.
+BIDDER_CACHES = ("caltrans_bidders.jsonl", "sf_bidders.jsonl")
+
 ENRICHMENTS = (
     ("spending_index.json", "index", "attach_spending"),
     ("supplier_locations.json", None, "attach_location"),
@@ -203,7 +208,7 @@ def merge_document_corpus(outdir: pathlib.Path, manifest: list[dict[str, Any]],
 
 def observed_participants(document_candidates: list[dict[str, Any]],
                           outdir: pathlib.Path) -> list[dict[str, Any]]:
-    """Document-extracted candidates plus any harvested Caltrans bidder rows.
+    """Document-extracted candidates plus every harvested bidder cache.
 
     Kept as a merge rather than a second corpus because both are the same kind of claim --
     an official source naming a company against a specific solicitation -- and the export
@@ -211,7 +216,7 @@ def observed_participants(document_candidates: list[dict[str, Any]],
     harvest does not inflate the participant count.
     """
     rows = list(document_candidates)
-    cached = _read_jsonl(outdir / "caltrans_bidders.jsonl")
+    cached = [row for cache in BIDDER_CACHES for row in _read_jsonl(outdir / cache)]
     seen = {(r.get("business_unit"), r.get("event_id"), r.get("vendor_name_raw"))
             for r in rows}
     for row in cached:
@@ -239,3 +244,29 @@ def unresolved_identity_review(known: Iterable[dict[str, Any]]) -> list[dict[str
         "page": row.get("page"),
         "action": "match against an SCPRS supplier_id before treating as resolved",
     } for row in known]
+
+
+def profile_corpus(awards: list[dict[str, Any]],
+                   outdir: pathlib.Path) -> list[dict[str, Any]]:
+    """The award rows vendor profiles are built from: the sweep plus any bidder backfill.
+
+    Profiles are descriptive -- counts, agencies, amount ranges for one vendor at a time --
+    so a deeper history for some vendors makes them more accurate, not biased. Ranking is
+    the opposite: enriching a subset reorders it, measurably, which is why prediction keeps
+    ranking on the sweep alone and `test_analyze_ranks_on_the_sweep_not_on_the_profile_corpus`
+    pins that apart.
+
+    Deduplicated on (purchase_doc, supplier_id), the natural key the award sweep uses.
+    """
+    extra = _read_jsonl(outdir / "awards_bidder_enriched.jsonl")
+    if not extra:
+        return list(awards)
+    merged = list(awards)
+    seen = {(r.get("purchase_doc"), r.get("supplier_id")) for r in merged}
+    for row in extra:
+        key = (row.get("purchase_doc"), row.get("supplier_id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+    return merged
