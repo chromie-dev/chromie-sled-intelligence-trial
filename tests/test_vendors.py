@@ -216,3 +216,56 @@ class DataQualityTests(unittest.TestCase):
         p = vendors.build_profile("x", [award(start_date=soon)])
         self.assertEqual(p["implausible_date_count"], 0)
         self.assertEqual(p["rows_with_parseable_date"], 1)
+
+
+def bid(name="TECHNOLOGY INTEGRATION GROUP", event="08A3933", rank=1):
+    return {"business_unit": "2660", "event_id": event, "vendor_name_raw": name,
+            "rank": rank, "source_key": "caltrans_bid_results",
+            "evidence_url": "https://dot.ca.gov/x"}
+
+
+class BidHistoryTests(unittest.TestCase):
+    """Observed wins and losses, which SCPRS alone cannot supply."""
+
+    def _profile(self):
+        return vendors.build_profile("0000000269", [award()])
+
+    def test_win_rate_is_computed_from_observed_wins_and_losses(self) -> None:
+        profile = self._profile()
+        vendors.attach_bid_history([profile], [
+            bid(event="A1", rank=1), bid(event="A2", rank=3), bid(event="A3", rank=2)])
+        self.assertEqual(profile["bids_observed"], 3)
+        self.assertEqual(profile["losses_observed"], 2)
+        self.assertEqual(profile["win_rate"], 0.3333)
+
+    def test_the_note_says_the_win_rate_covers_only_the_observed_subset(self) -> None:
+        # A win rate over Caltrans solicitations is not this vendor's overall win rate,
+        # and presenting it as one would be the exact overclaim the trial avoids.
+        profile = self._profile()
+        vendors.attach_bid_history([profile], [bid(event="A1", rank=1)])
+        self.assertIn("caltrans_bid_results", profile["win_rate_basis"]["source_keys"])
+        self.assertIn("subset", profile["win_rate_note"].lower())
+
+    def test_identity_match_is_by_name_and_labelled_low_confidence(self) -> None:
+        profile = self._profile()
+        vendors.attach_bid_history([profile], [bid(name="Technology Integration Group.")])
+        self.assertEqual(profile["bids_observed"], 1)
+        self.assertEqual(profile["win_rate_basis"]["identity_confidence"], "low")
+
+    def test_an_unmatched_vendor_keeps_the_not_computable_note(self) -> None:
+        profile = self._profile()
+        vendors.attach_bid_history([profile], [bid(name="SOME OTHER COMPANY INC")])
+        self.assertIsNone(profile["win_rate"])
+        self.assertIn("not computable", profile["win_rate_note"])
+
+    def test_the_same_solicitation_counts_once_per_vendor(self) -> None:
+        profile = self._profile()
+        vendors.attach_bid_history([profile], [bid(event="A1"), bid(event="A1")])
+        self.assertEqual(profile["bids_observed"], 1)
+
+    def test_the_join_reports_how_many_profiles_matched(self) -> None:
+        profile = self._profile()
+        summary = vendors.attach_bid_history([profile], [bid()])
+        self.assertEqual(summary["matched"], 1)
+        self.assertEqual(summary["profiles"], 1)
+        self.assertEqual(summary["bid_rows"], 1)

@@ -434,3 +434,65 @@ def attach_location(profiles: list[dict[str, Any]],
                            "counties and vendors state a city. Not implemented, so the "
                            "geographic-activity prediction feature remains unscored."),
     }
+
+
+def attach_bid_history(profiles: list[dict[str, Any]],
+                       bid_rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Attach observed wins and losses to profiles in place. Returns a join summary.
+
+    SCPRS records who won and is silent on who lost, which is why `build_profile` leaves
+    `win_rate` null. A bidder row that names the whole field -- currently only the Caltrans
+    bid-results page -- supplies the missing half: rank 1 is a win, any lower rank is an
+    observed loss against a named competitor.
+
+    Two honest limits, both carried in `win_rate_basis` rather than left to the reader:
+
+    * The rate covers **only the solicitations observed here**, not the vendor's whole
+      history. A vendor bidding mostly outside Caltrans has a rate computed from a small
+      and unrepresentative slice.
+    * The join is by normalised name, because bid-results pages carry no supplier id. That
+      is the same low-confidence comparison `attach_spending` makes, and it can be wrong.
+    """
+    by_name: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
+    rows = list(bid_rows)
+    for row in rows:
+        key = normalize_name(row.get("vendor_name_raw") or "")
+        if key:
+            by_name[key].append(row)
+
+    matched = 0
+    for profile in profiles:
+        observed = by_name.get(normalize_name(profile.get("canonical_name") or ""))
+        if not observed:
+            continue
+        matched += 1
+        # One solicitation counts once even if the page lists a vendor twice.
+        best: dict[tuple[Any, Any], int] = {}
+        sources: set[str] = set()
+        for row in observed:
+            event = (row.get("business_unit"), row.get("event_id"))
+            rank = row.get("rank")
+            if rank is None:
+                continue
+            best[event] = min(best.get(event, rank), rank)
+            sources.add(row.get("source_key") or "unknown")
+        if not best:
+            continue
+        wins = sum(1 for rank in best.values() if rank == 1)
+        profile["bids_observed"] = len(best)
+        profile["wins_observed"] = wins
+        profile["losses_observed"] = len(best) - wins
+        profile["win_rate"] = round(wins / len(best), 4)
+        profile["win_rate_note"] = (
+            "computed over the subset of solicitations where a public source named the "
+            "full bidder field; not this vendor's overall win rate")
+        profile["win_rate_basis"] = {
+            "source_keys": sorted(sources),
+            "solicitations": [f"{bu}/{eid}" for bu, eid in sorted(best)],
+            "identity_confidence": "low",
+            "identity_basis": ("normalised company-name match: bid-results pages carry no "
+                               "supplier id, so this can attach the wrong company"),
+            "evidence_class": "observed",
+        }
+    return {"matched": matched, "profiles": len(profiles),
+            "bid_rows": len(rows), "vendors_in_bid_rows": len(by_name)}

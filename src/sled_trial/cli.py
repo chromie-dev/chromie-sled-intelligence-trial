@@ -186,6 +186,40 @@ def cmd_spending(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_bidders(args: argparse.Namespace) -> int:
+    """Harvest Caltrans weekly bid results: the one California source naming losing bidders.
+
+    Separate from `analyze` because it walks a page per week and its useful range is the
+    rolling window the site keeps, not one opportunity. `analyze` picks up what this
+    writes.
+    """
+    import datetime as dt
+
+    from .sources import caltrans
+
+    outdir = pathlib.Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    end = dt.date.today()
+    start = end - dt.timedelta(weeks=args.weeks)
+    print(f"harvesting Caltrans bid results, {start} to {end}")
+
+    session = ca.CalEProcureSession(delay_seconds=args.delay)
+    result = caltrans.harvest(session, start, end)
+    candidates = caltrans.bidder_candidates(result["solicitations"])
+
+    documents.write_jsonl(candidates, outdir / "caltrans_bidders.jsonl")
+    (outdir / "caltrans_bid_results.json").write_text(
+        json.dumps(result, indent=1, default=str))
+
+    solicitations = result["solicitations"]
+    multi = [s for s in solicitations if s["bidder_count"] > 1]
+    print(f"  weeks with a page: {len(result['weeks_populated'])} | "
+          f"weeks never published: {len(result['weeks_absent'])}")
+    print(f"  {len(solicitations)} solicitations, {len(candidates)} bidder observations")
+    print(f"  {len(multi)} solicitations name more than one bidder, i.e. carry losers")
+    return 0
+
+
 def cmd_evaluate(args: argparse.Namespace) -> int:
     """Regenerate build/evaluation.json from the cached award corpus.
 
@@ -320,8 +354,11 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
     # 3. Observed participants, from document tables only.
     print("  [3/9] observed participants")
-    known = _participants(pages)
+    known = assemble.observed_participants(_participants(pages), outdir)
     documents.write_jsonl(known, outdir / "participant_candidates.jsonl")
+    harvested = sum(1 for k in known if k.get("source_key") == "caltrans_bid_results")
+    if harvested:
+        print(f"        {len(known)} candidates ({harvested} from Caltrans bid results)")
 
     # 4. Award history for this buyer and category, plus a dated window for context.
     print("  [4/9] award history")
@@ -369,9 +406,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         if not cache.exists():
             print(f"        {attach_name}: no {filename} cached, dimension left unpopulated")
             continue
-        payload = json.loads(cache.read_text())
-        data = (payload.get(key) or {}) if key else payload
-        joined = attach(profiles, data)
+        joined = attach(profiles, assemble.load_enrichment(cache, key))
         print(f"        {attach_name}: {joined['matched']} of {joined['profiles']} profiles")
     (outdir / "vendor_profiles.json").write_text(json.dumps(profiles, indent=1, default=str))
     observed_ids = {p["supplier_id"] for p in profiles
@@ -418,11 +453,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
                 "weakening_factors": p["weakening_factors"],
                 "action": "confirm or discard before presenting to a client"}
                for p in prediction["predictions"] if p["confidence"] == "low"]
-    review += [{"type": "unresolved_document_identity",
-                "vendor_name_raw": k["vendor_name_raw"], "document": k["displayed_filename"],
-                "page": k["page"],
-                "action": "match against an SCPRS supplier_id before treating as resolved"}
-               for k in known]
+    review += assemble.unresolved_identity_review(known)
     (outdir / "review_queue.json").write_text(json.dumps(review, indent=1, default=str))
 
     # 8. Extraction-quality review over a representative page sample.
@@ -521,6 +552,11 @@ def build_parser() -> argparse.ArgumentParser:
     bp = sub.add_parser("backfill-primes", parents=[common],
                         help="deepen award history for the prime-eligible vendor set")
     bp.add_argument("--opportunity", required=True)
+
+    bd = sub.add_parser("bidders", parents=[common],
+                        help="harvest Caltrans weekly bid results (names losing bidders)")
+    bd.add_argument("--weeks", type=int, default=12,
+                    help="how many weeks back to walk; the site keeps roughly nine months")
     return parser
 
 
@@ -528,7 +564,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     return {"events": cmd_events, "documents": cmd_documents, "analyze": cmd_analyze,
             "spending": cmd_spending, "evaluate": cmd_evaluate,
-            "backfill-primes": cmd_backfill_primes}[
+            "backfill-primes": cmd_backfill_primes, "bidders": cmd_bidders}[
         args.command](args)
 
 

@@ -441,17 +441,23 @@ def participant_rows(observed: Iterable[dict[str, Any]],
             "id": local_id("gov_procurement_participants", record_id, competitor_id,
                            "known_bidder"),
             "record_id": record_id, "competitor_id": competitor_id,
-            "role": "known_bidder", "rank": None,
+            # Rank is null for a document-extracted candidate -- an intent-to-award notice
+            # names one company -- but the Caltrans bid-results page publishes the whole
+            # field in order, and that ordering is the evidence.
+            "role": "known_bidder", "rank": candidate.get("rank"),
             "submitted_amount": (float(candidate["amount_numeric"])
                                  if candidate.get("amount_numeric") else None),
             "submitted_amount_raw": candidate.get("amount_raw"),
             "score": None,
             "identity_confidence": "unresolved",
             "evidence_class": "observed",
-            "evidence": {"source_key": "caleprocure_event_package",
+            "evidence": {"source_key": candidate.get("source_key")
+                                       or "caleprocure_event_package",
                          "document": candidate.get("displayed_filename"),
                          "page": candidate.get("page"),
                          "sha256": candidate.get("sha256"),
+                         "url": candidate.get("evidence_url"),
+                         "bidders_on_this_solicitation": candidate.get("bidder_count"),
                          "evidence_row": candidate.get("evidence_row")},
             "observed_at": _now(),
         })

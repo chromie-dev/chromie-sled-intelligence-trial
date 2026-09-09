@@ -1,6 +1,8 @@
 """Offline tests for CLI argument handling and participant assembly. No network."""
 
+import json
 import pathlib
+import tempfile
 import unittest
 
 from sled_trial import assemble, cli
@@ -168,6 +170,58 @@ class EnrichmentWiringTests(unittest.TestCase):
         by_file = {f: k for f, k, _n in cli.ENRICHMENTS}
         self.assertEqual(by_file["spending_index.json"], "index")
         self.assertIsNone(by_file["supplier_locations.json"])
+
+class CaltransBidderWiringTests(unittest.TestCase):
+    """Harvested bidder rows must reach the observed-participant corpus."""
+
+    def test_cached_caltrans_rows_are_merged_with_document_candidates(self) -> None:
+        # Without this the harvest writes a file nobody reads, which is exactly how the
+        # prime-enrichment corpus ended up sitting unused in build/.
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = pathlib.Path(tmp)
+            (outdir / "caltrans_bidders.jsonl").write_text(json.dumps({
+                "business_unit": "2660", "event_id": "08A3933",
+                "vendor_name_raw": "Apex Waste Systems Inc.", "rank": 2}) + "\n")
+            doc_candidate = {"business_unit": "2740", "event_id": "0000040075",
+                             "vendor_name_raw": "AVIATE ENTERPRISES, INC."}
+            merged = assemble.observed_participants([doc_candidate], outdir)
+        self.assertEqual(len(merged), 2)
+        self.assertIn("Apex Waste Systems Inc.",
+                      [r["vendor_name_raw"] for r in merged])
+
+    def test_absent_cache_leaves_document_candidates_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            doc_candidate = {"business_unit": "2740", "event_id": "0000040075",
+                             "vendor_name_raw": "AVIATE ENTERPRISES, INC."}
+            merged = assemble.observed_participants([doc_candidate], pathlib.Path(tmp))
+        self.assertEqual(merged, [doc_candidate])
+
+    def test_the_same_bidder_is_not_counted_twice_across_reruns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = pathlib.Path(tmp)
+            row = {"business_unit": "2660", "event_id": "08A3933",
+                   "vendor_name_raw": "Apex Waste Systems Inc.", "rank": 2}
+            (outdir / "caltrans_bidders.jsonl").write_text(
+                json.dumps(row) + "\n" + json.dumps(row) + "\n")
+            merged = assemble.observed_participants([], outdir)
+        self.assertEqual(len(merged), 1)
+
+
+class ReviewQueueShapeTests(unittest.TestCase):
+    def test_a_bid_results_candidate_does_not_need_a_filename(self) -> None:
+        # cmd_analyze indexed k["displayed_filename"] on every observed participant and
+        # crashed the whole run when a Caltrans row, which cites a URL, reached it.
+        rows = assemble.unresolved_identity_review([
+            {"vendor_name_raw": "AVIATE ENTERPRISES, INC.",
+             "displayed_filename": "Intent_to_Award.pdf", "page": 1},
+            {"vendor_name_raw": "Apex Waste Systems Inc.",
+             "source_key": "caltrans_bid_results",
+             "evidence_url": "https://dot.ca.gov/x"},
+        ])
+        self.assertEqual([r["citation"] for r in rows],
+                         ["Intent_to_Award.pdf", "https://dot.ca.gov/x"])
+        self.assertEqual(rows[1]["source_key"], "caltrans_bid_results")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,7 +9,7 @@ import collections
 import csv
 import json
 import pathlib
-from typing import Any
+from typing import Any, Iterable
 
 from . import documents, extract
 
@@ -48,7 +48,18 @@ def _participants(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 ENRICHMENTS = (
     ("spending_index.json", "index", "attach_spending"),
     ("supplier_locations.json", None, "attach_location"),
+    # A .jsonl cache: `load_enrichment` reads either form, because the bidder harvest is a
+    # row stream while the other two are single documents.
+    ("caltrans_bidders.jsonl", None, "attach_bid_history"),
 )
+
+
+def load_enrichment(cache: pathlib.Path, key: str | None) -> Any:
+    """Read one enrichment cache, JSON or JSONL, and unwrap it if it names a key."""
+    if cache.suffix == ".jsonl":
+        return _read_jsonl(cache)
+    payload = json.loads(cache.read_text())
+    return (payload.get(key) or {}) if key else payload
 
 
 def _read_jsonl(path: pathlib.Path) -> list[dict[str, Any]]:
@@ -188,3 +199,43 @@ def merge_document_corpus(outdir: pathlib.Path, manifest: list[dict[str, Any]],
     documents.write_jsonl(manifest, outdir / "documents_manifest.jsonl")
     documents.write_jsonl(pages, outdir / "document_pages.jsonl")
     return manifest, pages
+
+
+def observed_participants(document_candidates: list[dict[str, Any]],
+                          outdir: pathlib.Path) -> list[dict[str, Any]]:
+    """Document-extracted candidates plus any harvested Caltrans bidder rows.
+
+    Kept as a merge rather than a second corpus because both are the same kind of claim --
+    an official source naming a company against a specific solicitation -- and the export
+    already reads this shape. Deduplicated on (event, vendor name) so re-running the
+    harvest does not inflate the participant count.
+    """
+    rows = list(document_candidates)
+    cached = _read_jsonl(outdir / "caltrans_bidders.jsonl")
+    seen = {(r.get("business_unit"), r.get("event_id"), r.get("vendor_name_raw"))
+            for r in rows}
+    for row in cached:
+        key = (row.get("business_unit"), row.get("event_id"), row.get("vendor_name_raw"))
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+    return rows
+
+
+def unresolved_identity_review(known: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Review rows for observed participants whose vendor identity is not yet resolved.
+
+    Observed participants arrive in two shapes: extracted from a document page, and read
+    off a Caltrans bid-results row that cites a URL rather than a filename. Indexing a
+    filename on every candidate crashed the run when the second shape appeared, so the
+    citation is whichever the row actually carries.
+    """
+    return [{
+        "type": "unresolved_participant_identity",
+        "vendor_name_raw": row.get("vendor_name_raw"),
+        "source_key": row.get("source_key") or "caleprocure_event_package",
+        "citation": row.get("displayed_filename") or row.get("evidence_url"),
+        "page": row.get("page"),
+        "action": "match against an SCPRS supplier_id before treating as resolved",
+    } for row in known]

@@ -92,9 +92,6 @@ class TruncationTests(unittest.TestCase):
             list(gen)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class BusinessUnitCriterionTests(unittest.TestCase):
     def test_criterion_is_named_business_unit_not_department(self) -> None:
@@ -125,3 +122,6 @@ class GridAnchorTests(unittest.TestCase):
         rows = scprs.parse_results(page)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["supplier_name"], "ULINE INC")
+
+if __name__ == "__main__":
+    unittest.main()

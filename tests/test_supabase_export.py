@@ -200,3 +200,29 @@ class MapperTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BidderRankTests(unittest.TestCase):
+    def test_an_observed_bidder_keeps_its_rank_and_names_its_own_source(self) -> None:
+        # Caltrans bid results give rank and a page URL; hardcoding rank to null and the
+        # source to the event package would throw away the only ranked bidder evidence
+        # California publishes.
+        candidate = {
+            "business_unit": "2660", "event_id": "08A3933",
+            "vendor_name_raw": "Apex Waste Systems Inc.",
+            "amount_raw": "$480,480.00", "amount_numeric": 480480.0,
+            "rank": 2, "source_key": "caltrans_bid_results",
+            "evidence_url": "https://dot.ca.gov/x", "evidence_row": "Apex | SB: Y",
+        }
+        row = next(r for r in se.participant_rows([candidate], []))
+        self.assertEqual(row["rank"], 2)
+        self.assertEqual(row["role"], "known_bidder")
+        self.assertEqual(row["evidence"]["source_key"], "caltrans_bid_results")
+
+    def test_a_document_candidate_still_defaults_to_the_event_package(self) -> None:
+        candidate = {"business_unit": "2740", "event_id": "0000040075",
+                     "vendor_name_raw": "AVIATE ENTERPRISES, INC.",
+                     "amount_raw": "$437,862.48", "amount_numeric": 437862.48}
+        row = next(r for r in se.participant_rows([candidate], []))
+        self.assertIsNone(row["rank"])
+        self.assertEqual(row["evidence"]["source_key"], "caleprocure_event_package")
