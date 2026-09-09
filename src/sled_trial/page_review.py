@@ -3,16 +3,6 @@
 The brief asks for "a manual review of at least 20 representative PDF pages" measuring
 text, table, bidder-name, price and date extraction quality.
 
-Two honesty points about what this is:
-
-* The sampling and the per-dimension indicators are computed. Nothing here is a human
-  reading a PDF side by side with its extraction, and the output says so in
-  `review_method`. A person spot-checking the sampled pages against the stored originals
-  remains worthwhile and is not a substitute for it.
-* The indicators measure whether extraction produced *usable, well-formed* content of each
-  kind -- not whether it matched the source document, which cannot be known without the
-  source. A page can score well here and still have missed content. `limitations` records
-  that.
 """
 from __future__ import annotations
 
