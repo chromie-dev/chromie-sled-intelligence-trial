@@ -1686,3 +1686,175 @@ There were no install instructions anywhere, so a reviewer following the reposit
 on four collection errors rather than a passing suite. `docs/RUNNING.md` covers install, the
 command list and what each costs; verified from a clean virtualenv: `pip install -e ".[dev]"`
 then `pytest -q` gives **356 passed**, offline, no credentials.
+
+## 2026-09-09 — CORRECTION: bidder lists ARE public in California, for 23% of the feed
+
+The 2026-09-07 entry states that California publishes no bidder lists and that no
+deterministic solicitation-to-award join exists. Both hold for the Cal eProcure surfaces
+surveyed. Both are wrong about the state as a whole, and the counterexample is the largest
+issuer in the feed.
+
+### Caltrans publishes every bidder, ranked, with amounts, anonymously
+
+`https://dot.ca.gov/programs/procurement-and-contracts/bid-results/bid-week-<YYYY-MM-DD>`,
+one page per week, slug dated to the Sunday. Verified anonymously, no login, no key.
+From the week of 2026-01-11, contract `08A3933`:
+
+```
+Ware Disposal Inc.          SB: N   $436,020.00
+Apex Waste Systems Inc.     SB: Y   $480,480.00
+Burrtec Waste Industries    SB: N   $801,571.80
+```
+
+Three bidders, rank order, **including the two that lost** — the fact the state portal
+does not carry and the reason every `win_rate` in `vendor_profiles.json` is null. The page
+also marks Small Business preference per bidder. Contract `09A1078` on the same page
+carries four bidders, `07A6272` one; 26 bid rows across six contracts that week.
+
+### The join is exact, not probabilistic
+
+Every contract number on the page links to
+`https://caleprocure.ca.gov/event/2660/<contract_number>`. Business unit 2660 is the
+Department of Transportation, and its event ids in our own feed (`01A6671`, `02A2535`,
+`07A6272`) are that same contract-number format. The join to a Cal eProcure event is
+**string equality on `event_id`** — no title similarity, no date window, no inference tier.
+`known_bidder` in README's sense is directly reachable for these events.
+
+**2660 is 81 of 359 events in the current feed, the single largest issuing agency.** The
+brief's minimum of 100 bidder-event observations is reachable from roughly four weekly
+pages.
+
+### Measured limits
+
+- **History is a rolling window.** Real content back to the week of 2025-12-14 (31 bid
+  rows); 2025-10-12 and earlier return an empty template. Roughly nine months, so a
+  harvester has to run continuously rather than backfill at leisure.
+- **The empty weeks are soft-404s: HTTP 200 with a ~23.7 KB shell**, against ~30 KB for a
+  real page. Byte-identical across dates. Exactly the "success that is not success" trap
+  `documents._looks_like_html` exists for, and a row count of zero must be read as
+  "no page", never "no bids that week".
+- **Results are preliminary**, subject to SB/DVBE/licensing/bonding verification, so the
+  posted low bidder is not necessarily the awardee. Rank is observed; award is not.
+- `ppmoe.dot.ca.gov/des/oe/awards/bidsum/dl.php?id=<n>`, the older per-project bid summary
+  endpoint, now returns a ServiceNow "DES NOT Found - PPMOE Migration" page under HTTP 200.
+  Another soft-404, and a reminder that this family of URLs moves.
+
+### The 1-in-30 award-notice figure was measuring the wrong population
+
+`documents_manifest.jsonl` covers 10 events. **Zero of them had passed their end date**;
+six were still open and four carried no parseable date. An open solicitation has not been
+awarded, so it cannot carry an award notice, and the DMV intent-to-award was caught inside
+a narrow window rather than being one-in-thirty rare.
+
+Worse for that harvesting strategy: **the feed contains no closed events at all** — 359 of
+359 are still open. Cal eProcure drops an event at close, so award notices attached after
+close are never reachable from the feed. Award-notice harvesting from the active feed is
+structurally low-yield and always will be. Caltrans bid results, which persist after close,
+are the durable substitute.
+
+This also matters for DGS policy: a protest must be filed within five working days of the
+**public posting of the Notice of Proposed Award**, so NOPAs are a required public artifact
+statewide. Where they are posted after an event leaves the feed is an open question and the
+next thing worth tracing.
+
+### Not established by this probe
+
+- **PlanetBids** hosts bid results and plan-holder lists for many California cities and
+  counties, and `pbsystem.planetbids.com/portal/<id>/bo/bo-search` answers HTTP 405 to a
+  GET — the endpoint exists and expects POST, per-agency portal ids confirmed (Corona is
+  39497). The platform was in scheduled maintenance during this probe, so whether the
+  results and plan-holder endpoints answer anonymously is **untested, not negative**.
+- **Board agendas and staff reports** routinely carry full bid tabulations — examples
+  located across Stanislaus, Santa Cruz and Placer counties. One Placer packet fetched is
+  a scanned image PDF with no text layer, so this path needs the OCR fallback rather than
+  native extraction. Two county document servers refused connections from this host, so
+  coverage across counties is unmeasured.
+- **Protest decisions** through the OAH Alternative Protest Process name protester and
+  awardee together. No published decision archive was located; unresolved.
+- **CPRA** remains the compliant fallback for a bid tabulation no portal posts. Not
+  automatable, and the brief asks for exactly this kind of documented manual path.
+
+### What this changes
+
+`sources/source_registry.csv` has 14 surfaces and none of them is Caltrans bid results —
+a first-class deliverable missed a public, anonymous, loser-inclusive bidder source
+belonging to the largest agency in the feed. The registry, `docs/SOURCES.md` and the
+"bidder lists are not public" claim in the report all need revising, and the honest
+framing is narrower than the original: *Cal eProcure* does not publish bidder lists;
+*California* does, agency by agency, and nobody has aggregated them.
+
+## 2026-09-09 — Caltrans bid-results adapter: 211 observed bidder events, 1 before
+
+The correction recorded above is now wired in. `sources/caltrans.py` fetches the weekly
+bid-results pages, parses the ranked field, and emits one observed-participant row per
+bidder. `cli bidders --weeks N` drives it; `analyze` consumes what it writes.
+
+Measured on a live 13-week harvest:
+
+| | Before | After |
+| --- | ---: | ---: |
+| Observed bidder events | 1 | **211** |
+| Solicitations with a named field | 1 | 76 |
+| Solicitations naming more than one bidder | 0 | **50** |
+| Supabase participant rows | 975 | 1,188 |
+
+Fifty solicitations carrying a loser is the number that matters: it is evidence the trial
+previously recorded as non-existent in California.
+
+### Design notes
+
+**Emit into the shape the export already reads.** `bidder_candidates` produces
+`vendor_name_raw` / `amount_raw` / `amount_numeric`, the field names
+`supabase_export.participant_rows` already consumes from document-extracted candidates, so
+this source needed no second export path. Two small generalisations there: `rank` is taken
+from the candidate instead of hardcoded null, and `source_key` is too, because rank is the
+whole point of a bid-results row and attributing it to the event package would be false.
+
+**Absent weeks are reported separately from empty weeks.** `harvest` returns
+`weeks_populated` and `weeks_absent`. An unpublished week answers HTTP 200 with a ~23.7 KB
+template, so collapsing the two would let a rolling-window boundary read as "no bids
+opened". `looks_populated` decides on the presence of a Cal eProcure event link.
+
+**Slugs round back to Sunday, not forward.** A page dated Sunday carries that week's
+openings, so a date maps to the Sunday on or before it. Rounding forward silently skips the
+first week in a range; the test names that case.
+
+### A crash the tests could not have caught
+
+`cmd_analyze` indexed `k["displayed_filename"]` on every observed participant. That held
+while every participant came from a document, and the first Caltrans row — which cites a
+URL, not a filename — took down the whole run. Fixed by moving the construction into
+`assemble.unresolved_identity_review` and citing whichever the row carries. The regression
+test was verified against the buggy form before being kept.
+
+The repo's own guard did catch the other one: `attach_bid_history` existed for a few
+minutes without an `ENRICHMENTS` entry, and
+`test_every_vendors_attach_function_is_declared` failed immediately. That test was written
+after this exact class of mistake happened four times, and it worked.
+
+### Win rates: machinery done, corpus not
+
+`vendors.attach_bid_history` computes wins, losses and a rate from observed rank, scoped and
+labelled: rank 1 is a win, any lower rank an observed loss, and `win_rate_basis` records the
+source keys, the solicitations counted, and that the identity match is a low-confidence name
+comparison. The note states it covers a subset rather than the vendor's overall history.
+
+**On the current corpus it matches nothing: 0 of 634 profiles.** That is not a defect in the
+join. Profiles are built from a six-day statewide SCPRS sweep — office supplies, IT goods,
+commodity purchases — while these are Caltrans highway and facility contractors. Exact
+normalised overlap between the 149 bidder names and the 630 profile names is zero, and the
+two nearest fuzzy matches include a false one ("A Superior Sanitation" against "A Plus
+Superior Sanitation"), which is a good argument against loosening the match.
+
+The vendors are reachable: an SCPRS name search returns `GRANITE CONSTRUCTION COMPANY`
+(`0000011589`), `ANDERSEN INTEGRATED SVCS INC` (`0000170357`) and `A TEICHERT & SON INC`
+(`0000028967`). So the missing step is corpus, not code — resolve each bidder name to a
+supplier id, backfill those vendors' awards, and the rate populates. Left unbuilt rather
+than half-built, and the review queue carries all 211 rows as
+`unresolved_participant_identity` so nothing is presented as resolved that is not.
+
+### Still Caltrans-only
+
+This covers business unit 2660, 81 of 359 events. PlanetBids was in maintenance during the
+probe and remains the largest untested source; board-agenda bid tabulations need OCR. Both
+are recorded in the entry above rather than claimed here.

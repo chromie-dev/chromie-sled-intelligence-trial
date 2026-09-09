@@ -1,10 +1,14 @@
 # Data sources
 
+Every California surface this pipeline touches, what it provides, and whether we can
+actually use it. Generated from `sources/source_registry.csv`, which holds the full
+18-field access research for each one.
+
 Two links are given where they differ: the **human page** you can open in a browser,
 and the **machine endpoint** the pipeline calls. They are not the same. The browser
 pages are JavaScript shells that carry no data; the endpoints are the PeopleSoft
 components underneath them, which serve complete data anonymously. That distinction
-took the most time and is the most important thing in the document below.
+cost a day to find and is the single most useful thing in this document.
 
 ## In active use
 
@@ -70,6 +74,18 @@ took the most time and is the most important thing in the document below.
 - Stable identifiers: business_unit; document_id
 - Verified: 2026-09-07
 - **Gaps and caveats:** payments only - no bidders, no solicitation ids. VENDOR_NAME truncated ~30 chars, so join to SCPRS supplier_id by name with low confidence. document_id is a FI$Cal voucher ref; join to SCPRS purchase_doc UNPROVEN. 10.6GB total, selective fetch required
+
+### Weekly bid results (all bidders, ranked)
+
+- Endpoint we call: `https://dot.ca.gov/programs/procurement-and-contracts/bid-results`
+- Provides: bidders
+- Access: HTML (one static page per week)
+- Login required: no
+- When it becomes public: within about 20 minutes of the public bid opening, held Tuesdays and Thursdays
+- History available: rolling window; measured populated back to the week of 2025-12-14, empty at 2025-10-12
+- Stable identifiers: contract number = Cal eProcure event_id under business_unit 2660; join is string equality, not inference
+- Verified: 2026-09-09
+- **Gaps and caveats:** Caltrans only, so no coverage of the other 278 events in the feed. Results are PRELIMINARY, pending SB/DVBE, licensing and bonding verification, so the low bidder is not necessarily the awardee. No supplier_id on the page, so identity resolution is a name match. Unpublished weeks answer HTTP 200 with an empty template rather than 404
 
 
 ## Verified, not yet wired in
@@ -137,7 +153,7 @@ took the most time and is the most important thing in the document below.
 - History available: unknown
 - Stable identifiers: unknown
 - Verified: 2026-09-07
-- **Gaps and caveats:** This is the answer to the brief's central question: California does not publicly disclose bidder identities here. Fallback is bid-tabulation and intent-to-award PDFs posted as event attachments, then SCPRS awardees, then expenditure-derived participation.
+- **Gaps and caveats:** Cal eProcure does not publicly disclose bidder identities here. That is a fact about this portal, not about California: caltrans_bid_results publishes the full ranked field, losers included, for business unit 2660. Fallbacks elsewhere are bid-tabulation and intent-to-award PDFs posted as event attachments, then SCPRS awardees, then expenditure-derived participation.
 
 ### Purchase Order Data (DGS) - historical inference corpus
 

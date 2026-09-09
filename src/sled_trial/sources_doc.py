@@ -16,7 +16,7 @@ REGISTRY = "sources/source_registry.csv"
 TIERS = {
     "In active use": [
         "caleprocure_event_list", "caleprocure_event_detail", "caleprocure_event_package",
-        "caleprocure_scprs", "openfiscal_dept_vendor_tx",
+        "caleprocure_scprs", "openfiscal_dept_vendor_tx", "caltrans_bid_results",
     ],
     "Verified, not yet wired in": [
         "caleprocure_supplier_search", "caleprocure_lpa", "caleprocure_vendor_ads",
