@@ -2003,3 +2003,75 @@ session that only a live run could catch, after the one where every observed par
 was assumed to carry a filename. Worth recording as a pattern: the CLI's network commands
 have no test coverage by construction, so each one has to be run once before it is
 believed.
+
+## 2026-09-09 — Running the README command verbatim broke three assumptions
+
+The deliverable command had never been run as the brief writes it: every run this session
+passed `--reuse-awards` and skipped `--download-documents`. Running it verbatim found three
+problems, two of them in the numbers being shipped.
+
+### The command could not reproduce the corpus it shipped
+
+`--awards-from` defaulted to the literal `09/01/2026`, so a verbatim run swept three days
+and produced 600 award rows and 393 profiles, against the 974 rows and 658 profiles in
+`build/`. The shipped figures came from a wider window passed by hand and never written
+down. Anyone following the README would have got smaller numbers than the report claimed
+and no way to tell why.
+
+The default is now derived: seven days before the cutoff, via
+`assemble.default_awards_from`. The verbatim command reproduces the deliverable, which is
+the only property that makes the figures checkable.
+
+### The sweep was silently losing two thirds of its rows
+
+`search_date_sliced` sets `truncated` on any slice still over the 200-row grid cap after
+bisection, and nothing read it. Measured on the reference window: **6 of 7 slices capped,
+1,252 rows collected against 3,789 the portal reported.** The corpus was a third of the
+available data and every downstream figure was computed on it without a word.
+
+`assemble.award_sweep_coverage` now summarises what was collected against what was
+reported, `analyze` prints a warning, and `build/awards_coverage.json` names the slices and
+the shortfall. Same class of silence as a soft-404 reading as "no results" — the fix is to
+say so, not to pretend the window was complete.
+
+The remedy is a second subdivision axis, not a wider window: widening adds days that will
+themselves cap. `search_date_sliced` already accepts `subdivide_by`; wiring it is the next
+increment and is not done.
+
+### The model no longer beats a trivial baseline
+
+Re-evaluated on the deeper corpus, over 64 unselected events:
+
+| | 836-row history (previous) | 1,052-row history (now) |
+| --- | ---: | ---: |
+| Model precision@3 | 0.0727 | **0.0573** |
+| Best trivial baseline | 0.0606 | 0.0625 |
+| Lift | 1.20x | **0.917x** |
+
+The 2026-09-08 entry claimed the lift was the stable quantity, holding at 1.20-1.33x across
+every set size tried. That was measured across subsets of one shallow corpus. On a deeper
+one it does not hold: the model is now *worse* than ranking by "most awards with this
+agency". Reported as measured, in the report table as well as here.
+
+Two honest caveats in both directions. The corpus is a third complete, so neither figure is
+measured on the real distribution. And the target remains same-day purchase orders rather
+than solicitation bidders, which the 2026-09-08 entry already argued is close to noise for
+commodity categories. Neither rescues the number: on the evidence available the ranking has
+not earned its features, and the right next move is the redefined forward-window target
+that entry proposed, not weight tuning.
+
+### An ordering trap between two commands
+
+`analyze` writes `report.md` from whatever `evaluation.json` currently holds, while
+`evaluate` is a separate command that runs after it. Following the documented order left a
+report quoting the previous run's precision beside an `evaluation.json` holding the current
+one. `docs/RUNNING.md` now states the order; the durable fix would be for `report` to read
+the evaluation's own timestamp and refuse to quote a stale one.
+
+### Every command now run at least once
+
+`events`, `documents` and `spending` predated the `assemble` extraction and had not been
+run since. All three work: 362 events across 66 agencies, 2/2 documents at 100% acquisition
+with the intent-to-award participant still extracted, 18,058 payment rows from an 8 MB
+sample. Both bugs found this session were in network commands, which have no test coverage
+by construction, so each one is now exercised before shipping rather than after.

@@ -89,13 +89,13 @@ research, then documents, then identity, then prediction, then teaming, then exp
 
 | Rubric area | Pts | State |
 | --- | ---: | --- |
-| Source discovery and access research | 15 | done — 14 surfaces measured in `sources/source_registry.csv` |
+| Source discovery and access research | 15 | done — 16 surfaces measured in `sources/source_registry.csv`, including the two that name losing bidders |
 | Document acquisition and PDF extraction | 15 | done — 84 documents, 863 pages, OCR exercised |
-| Bidder-event accuracy and provenance | 15 | done — observed awardee extracted from a real award notice |
-| Vendor identity resolution and profiles | 15 | done — canonical `supplier_id`, 634 profiles |
-| Likely-bidder prediction quality | 15 | done — explainable, precision@3 0.0727, lift 1.2x over the best trivial baseline |
+| Bidder-event accuracy and provenance | 15 | done — 233 observed bidder events across Caltrans and SF Public Works, 71 solicitations naming losers |
+| Vendor identity resolution and profiles | 15 | done — canonical `supplier_id`, 723 profiles, 24 with an observed win rate |
+| Likely-bidder prediction quality | 15 | done and honest — explainable, precision@3 0.0573, lift **0.917x**: on the deeper corpus the model no longer beats the best trivial baseline |
 | Prime and teaming recommendations | 15 | done — 21 of 68 eligible vendors qualified, dual-role flagged |
-| Tests, failure handling, reproducibility | 5 | 356 offline tests, typed failures, bounded retries |
+| Tests, failure handling, reproducibility | 5 | 429 offline tests, typed failures, bounded retries, every CLI command run end to end |
 | Demo and product recommendations | 5 | `build/report.md` generated from artifacts |
 
 ### What the trial establishes
@@ -117,13 +117,19 @@ in `docs/RUNNING.md`.
 
 ### What remains honestly short
 
-- **Prediction is weak** (precision@3 0.0727 on the unselected 55-event set, 1.2x the best
-  trivial baseline) and the ground truth is purchase-level, not
-  solicitation-level. A solicitation-level evaluation set must be assembled from award-notice
-  documents; its size is bounded by how many agencies post one.
-- **Minimums partly met.** 634 vendor profiles against 25 required, and 55 held-out events
-  evaluated. Bidder-event observations from documents number 1, not 100 — because only one
-  event in thirty sampled carried an award notice. Volume comes from award history instead.
+- **Prediction does not beat a trivial baseline on the deeper corpus.** precision@3 0.0573
+  over 64 unselected events, against 0.0625 for "most awards with this agency" — a lift of
+  0.917x. The earlier 1.2x was measured on a 836-row history; at 1,052 rows the advantage
+  disappears. The ground truth is also purchase-level, not solicitation-level. Reported as
+  measured; the honest read is that the ranking has not yet earned its features.
+- **The award sweep is incomplete and now says so.** 1,252 rows collected against 3,789 the
+  portal reported, because 6 of 7 date slices hit the 200-row grid cap. `awards_coverage.json`
+  records which slices and by how much. Fixing it needs a second subdivision axis, not a
+  wider window.
+- **Minimums met.** 723 vendor profiles against 25 required, 64 held-out events, and 233
+  observed bidder events against the 100 required — 211 from Caltrans weekly bid results, 21
+  from SF Public Works tabulations, 1 from an intent-to-award PDF. 71 solicitations name more
+  than one bidder, so losing bidders are observed rather than absent.
 - **Lineage finds no predecessors on the demonstrated event.** The searcher is built and
   reads document text, but the one event exercised has no public predecessor to find. It
   needs running across many events to show it can find one, and a live run initially produced

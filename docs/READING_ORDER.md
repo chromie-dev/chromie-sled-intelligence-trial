@@ -9,7 +9,7 @@ Guide to navigating this repository and understanding the SLED competitive intel
 If you only read three things:
 
 1. [tasks/todo.md](file:///Users/pookie/chromie-sled-intelligence-trial/tasks/todo.md#L85-L135) — Jump to the "Review" section at the bottom. It maps all six graded areas, what is implemented, and what remains honestly short.
-2. [build/report.md](file:///Users/pookie/chromie-sled-intelligence-trial/build/report.md) — 211 lines of plain prose. This is what the system actually produces for a reader, generated from real data.
+2. [build/report.md](file:///Users/pookie/chromie-sled-intelligence-trial/build/report.md) — 231 lines of plain prose. This is what the system actually produces for a reader, generated from real data.
 3. [DECISIONS.md:L421](file:///Users/pookie/chromie-sled-intelligence-trial/DECISIONS.md#L421) — "Observed bidder identity DOES exist in California, inside award-notice PDFs." The central finding of the whole trial.
 
 Reading these three takes approximately 20 minutes and covers the core thesis and findings.
@@ -57,7 +57,7 @@ Then review [sources/source_registry.csv](file:///Users/pookie/chromie-sled-inte
 
 ```bash
 python -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
-python -m pytest -q                       # 356 passed, offline, no credentials
+python -m pytest -q                       # 424 passed, offline, no credentials
 
 python -m sled_trial.cli analyze \
   --opportunity data/examples/active_opportunity.json \
@@ -91,13 +91,13 @@ Read modules in execution order rather than alphabetical order:
 | 2: Read documents | [extract.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/extract.py) | 395 | `document_pages.jsonl`, `participant_candidates.jsonl` |
 | 4: Award history | [sources/scprs.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/sources/scprs.py) | 204 | `awards.jsonl` |
 | 5: Predecessor search | [lineage.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/lineage.py) | 277 | `procurement_lineage.json` |
-| 6: Vendor identity | [vendors.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/vendors.py) | 436 | `vendor_profiles.json` |
+| 6: Vendor identity | [vendors.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/vendors.py) | 583 | `vendor_profiles.json` |
 | 6: Prediction | [predict.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/predict.py) | 552 | `opportunity_intelligence.json`, `evaluation.json` |
 | 7: Prime teaming | [primes.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/primes.py) | 308 | `prime_candidates.json` |
-| 8: Exports | [supabase_export.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/supabase_export.py) + [docs/supabase_mapping.md](file:///Users/pookie/chromie-sled-intelligence-trial/docs/supabase_mapping.md) | 546 + 177 | `build/supabase/` |
-| 8: Report generation | [report.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/report.py) | 335 | `report.md` |
-| Assembly | [assemble.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/assemble.py) — artifact shaping, no network | 190 | `source_coverage.json`, `review_queue.json` |
-| Glue | [cli.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/cli.py) — examine `cmd_analyze` | 536 | — |
+| 8: Exports | [supabase_export.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/supabase_export.py) + [docs/supabase_mapping.md](file:///Users/pookie/chromie-sled-intelligence-trial/docs/supabase_mapping.md) | 552 + 177 | `build/supabase/` |
+| 8: Report generation | [report.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/report.py) | 356 | `report.md` |
+| Assembly | [assemble.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/assemble.py) — artifact shaping, no network | 272 | `source_coverage.json`, `review_queue.json` |
+| Glue | [cli.py](file:///Users/pookie/chromie-sled-intelligence-trial/src/sled_trial/cli.py) — examine `cmd_analyze` | 660 | — |
 
 Every module's top docstring explains what the code can and cannot claim. Reading those docstrings first gives a clear view of the architectural boundaries.
 

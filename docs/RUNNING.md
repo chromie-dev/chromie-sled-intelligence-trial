@@ -17,7 +17,7 @@ Verified on a clean virtualenv: the install above is enough to run the whole tes
 
 ```bash
 python -m pytest -q
-# 356 passed, 174 subtests passed
+# 424 passed, 192 subtests passed
 ```
 
 Tests are offline and need no credentials, no network and no API key. They use the
@@ -44,7 +44,14 @@ python -m sled_trial.cli analyze \
 ```
 
 Writes all ten required artifacts plus the seven Supabase-shaped tables. It reaches
-Cal eProcure over plain HTTP; no browser and no API key are involved.
+Cal eProcure over plain HTTP; no browser and no API key are involved. Verified end to end
+as written above.
+
+The award window defaults to seven days before the cutoff. Expect a warning: the SCPRS grid
+caps at 200 rows per slice and cannot be paged, so most slices come back truncated and
+`build/awards_coverage.json` records how many rows the portal reported that were not
+retrieved. On the reference run that is 1,252 collected against 3,789 reported. Widening
+the window makes this worse, not better; the fix is a second subdivision axis.
 
 `--reuse-awards` replays the run from `build/awards.jsonl` instead of re-querying the
 award registry, which is the fast path when only the analysis changed.
@@ -61,6 +68,10 @@ award registry, which is the fast path when only the analysis changed.
 | `tabulations --page URL` | Harvest SF Public Works bid tabulations | yes |
 | `evaluate` | Regenerate `build/evaluation.json` from the cached corpus | no |
 | `analyze --opportunity FILE` | The deliverable above | yes |
+
+**Order matters once.** `analyze` writes `report.md` from whatever `evaluation.json` holds,
+so run `evaluate` first, or run `analyze` again afterwards. Otherwise the report quotes the
+previous run's precision figures while `evaluation.json` holds the current ones.
 
 `evaluate` and `backfill-primes` are separate commands rather than stages of `analyze`
 because each is expensive in a different way, and because the evaluation number has to be

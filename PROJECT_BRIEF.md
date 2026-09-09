@@ -1,5 +1,12 @@
 # Project brief
 
+> **Superseded by `README.md` for this trial.** This brief describes generic multi-portal
+> opportunity normalisation; the README describes California bidder and teaming
+> intelligence, and carries the rubric the work is scored against. Where they conflict the
+> README wins. Reasoning in `DECISIONS.md`, entry of 2026-09-07 "Target spec is README.md".
+> Left in place unedited otherwise, since it came with the repository.
+
+
 ## User problem
 
 SLED buyers publish through fragmented portals with inconsistent fields, terminology, amendment behavior, and deadlines. A contractor needs one trustworthy view of what is open, what changed, what fits, and what action to take.
