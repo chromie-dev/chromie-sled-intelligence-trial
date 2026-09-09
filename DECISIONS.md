@@ -2075,3 +2075,34 @@ run since. All three work: 362 events across 66 agencies, 2/2 documents at 100% 
 with the intent-to-award participant still extracted, 18,058 payment rows from an 8 MB
 sample. Both bugs found this session were in network commands, which have no test coverage
 by construction, so each one is now exercised before shipping rather than after.
+
+## 2026-09-09 — CORRECTION to the entry above: the two precision figures are indistinguishable
+
+The previous entry reported that on the deeper corpus the model "no longer beats a trivial
+baseline" and put a 0.917x lift beside the earlier 1.20x. Both figures are real and both
+reproduce under today's code — the difference is the award window, six days against seven —
+but framing the second as a regression was an overclaim, and the arithmetic says so.
+
+| Corpus | Events | p@3 | Per-event sd | Std error | 95% CI | Events scoring zero |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 974 rows, window 08/28 | 55 | 0.0727 | 0.164 | 0.0222 | ±0.0435 | 45 of 55 |
+| 1,252 rows, window 08/27 | 64 | 0.0573 | 0.126 | 0.0157 | ±0.0308 | 53 of 64 |
+
+The gap is **0.0154**, comfortably inside either interval. Precision@5 actually moved the
+other way, 0.0582 to 0.0594. These are the same measurement twice, not a before and after.
+
+**What can honestly be said:** at 55-64 events with four fifths of them scoring exactly
+zero, this evaluation cannot resolve a lift of 1.2x from one of 0.9x. The ranking is not
+demonstrated to beat counting past wins, and it is not demonstrated to lose to it either.
+The result is undetermined, and the sample size is the reason.
+
+**Why the shipped headline stays at 0.0573.** Not because it is the truer number — neither
+is — but because it is what the README command produces with no flags. Quoting the 0.0727
+would mean choosing the window after seeing which one scored better, which is the same
+selection error as the discarded 0.17, on a different axis. The number a reviewer gets by
+typing the documented command is the number that gets quoted, whichever way it falls.
+
+Both figures and the interval now appear in the report, so a reader sees the uncertainty
+rather than a spurious decimal. The fix for the underlying problem is not a better model:
+it is more events, which means either a longer window with the grid cap solved, or the
+forward-window target the 2026-09-08 entry proposed instead of the same-day lottery.

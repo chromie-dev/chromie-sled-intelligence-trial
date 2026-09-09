@@ -93,7 +93,7 @@ research, then documents, then identity, then prediction, then teaming, then exp
 | Document acquisition and PDF extraction | 15 | done — 84 documents, 863 pages, OCR exercised |
 | Bidder-event accuracy and provenance | 15 | done — 233 observed bidder events across Caltrans and SF Public Works, 71 solicitations naming losers |
 | Vendor identity resolution and profiles | 15 | done — canonical `supplier_id`, 723 profiles, 24 with an observed win rate |
-| Likely-bidder prediction quality | 15 | done and honest — explainable, precision@3 0.0573, lift **0.917x**: on the deeper corpus the model no longer beats the best trivial baseline |
+| Likely-bidder prediction quality | 15 | done — explainable, precision@3 0.0573, lift 0.917x, but the 95% CI is ±0.031 so the lift is **undetermined**: this evaluation cannot separate the model from the baseline |
 | Prime and teaming recommendations | 15 | done — 21 of 68 eligible vendors qualified, dual-role flagged |
 | Tests, failure handling, reproducibility | 5 | 429 offline tests, typed failures, bounded retries, every CLI command run end to end |
 | Demo and product recommendations | 5 | `build/report.md` generated from artifacts |
@@ -117,11 +117,13 @@ in `docs/RUNNING.md`.
 
 ### What remains honestly short
 
-- **Prediction does not beat a trivial baseline on the deeper corpus.** precision@3 0.0573
-  over 64 unselected events, against 0.0625 for "most awards with this agency" — a lift of
-  0.917x. The earlier 1.2x was measured on a 836-row history; at 1,052 rows the advantage
-  disappears. The ground truth is also purchase-level, not solicitation-level. Reported as
-  measured; the honest read is that the ranking has not yet earned its features.
+- **Prediction is unproven either way, and the sample size is why.** precision@3 0.0573
+  over 64 unselected events against 0.0625 for "most awards with this agency", a lift of
+  0.917x. On a six-day window the same code gives 0.0727 and 1.20x. The gap between them is
+  0.0154 against a 95% CI of ±0.031, so those are the same measurement twice, not a
+  before and after. Four fifths of events score exactly zero. The ranking is not shown to
+  beat counting past wins, nor shown to lose to it. The ground truth is also purchase-level
+  rather than solicitation-level. More events is the fix, not a better model.
 - **The award sweep is incomplete and now says so.** 1,252 rows collected against 3,789 the
   portal reported, because 6 of 7 date slices hit the 200-row grid cap. `awards_coverage.json`
   records which slices and by how much. Fixing it needs a second subdivision axis, not a
