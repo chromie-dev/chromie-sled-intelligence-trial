@@ -99,6 +99,40 @@ class ParseTests(unittest.TestCase):
             "Attachment 2: Contract Monitoring Division 14B Waiver"))
 
 
+class StatusVariantTests(unittest.TestCase):
+    """Local-business status is written several ways and must never enter the name."""
+
+    def _one(self, line):
+        text = ("TABULATION OF BIDS\nSOURCING ID: 1\n"
+                "BIDDERS (in the order received & opened): LBE Status Total Bid Price\n"
+                + line + "\n")
+        return sfpublicworks.parse_tabulation(text)["bidders"][0]
+
+    def test_slashed_status_is_stripped(self) -> None:
+        b = self._one("A. Ruiz Construction Company, Inc. Micro / Small / SBA LBE 2% $1,000.00")
+        self.assertEqual(b["vendor_name"], "A. Ruiz Construction Company, Inc.")
+        self.assertEqual(b["lbe_status"], "Micro / Small / SBA LBE 2%")
+
+    def test_not_applicable_is_stripped_and_recorded_as_absent(self) -> None:
+        b = self._one("City Building, Inc. N/A $1,000.00")
+        self.assertEqual(b["vendor_name"], "City Building, Inc.")
+        self.assertIsNone(b["lbe_status"])
+
+    def test_the_hyphenated_form_still_works(self) -> None:
+        b = self._one("Ronan Construction Micro-LBE 10% $1,000.00")
+        self.assertEqual(b["vendor_name"], "Ronan Construction")
+        self.assertEqual(b["lbe_status"], "Micro-LBE 10%")
+
+    def test_a_name_with_no_status_at_all_is_untouched(self) -> None:
+        b = self._one("Plain Contractor Inc. $1,000.00")
+        self.assertEqual(b["vendor_name"], "Plain Contractor Inc.")
+        self.assertIsNone(b["lbe_status"])
+
+    def test_a_company_whose_name_contains_a_slash_survives(self) -> None:
+        b = self._one("Smith/Jones Builders $1,000.00")
+        self.assertEqual(b["vendor_name"], "Smith/Jones Builders")
+
+
 class DiscoveryTests(unittest.TestCase):
     PAGE = """
     <a href="/sites/default/files/Commissions/Nov%2013%202025/Item%204d_award.pdf">award</a>

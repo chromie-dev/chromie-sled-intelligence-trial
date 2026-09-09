@@ -40,15 +40,25 @@ _FIELD = {
     "bids_received": re.compile(r"^BIDS\s+RECEIVED:\s*(.+)$", re.I),
 }
 _ESTIMATE = re.compile(r"^Engineer'?s\s+Estimate:\s*\$?([\d,]+(?:\.\d{2})?)", re.I)
-# A bidder line ends in the price. Anything between the company name and that price is the
-# local-business status, which is sometimes absent.
-_BID_LINE = re.compile(
-    r"^(?P<name>.+?)\s+(?P<lbe>(?:Micro|Small|SBE|Non)[- ]?LBE\b[^$]*?)?\s*"
-    r"\$(?P<amount>[\d,]+(?:\.\d{2})?)\s*$")
+# A bidder line ends in the price. The company name and its local-business status are
+# separated only by spacing, so they come apart in two steps rather than one clever pattern.
+_BID_LINE = re.compile(r"^(?P<head>.+?)\s*\$(?P<amount>[\d,]+(?:\.\d{2})?)\s*$")
+# Status is written at least three ways: "Micro-LBE 10%", "Micro / Small / SBA LBE 2%", and
+# "N/A". Matching only the hyphenated form left the others inside the company name, which
+# split one company into two.
+_TRAILING_STATUS = re.compile(
+    r"\s+(?P<status>[\w./\-]+(?:\s*/\s*[\w./\-]+)*\s*\b(?:LBE|SBE)\b[\s\w%./\-]*"
+    r"|N/?A)\s*$", re.I)
+
 # Lines that end in a price but are totals, not companies.
 _SUMMARY = re.compile(r"^(?:Average\s+Bid|Engineer'?s\s+Estimate|Total|Median|Low\s+Bid|"
                       r"%|cc)\b", re.I)
 _PDF_LINK = re.compile(r'href="([^"]*?/sites/default/files/Commissions/[^"]*?\.pdf)"', re.I)
+
+
+def _status(raw: str | None) -> str | None:
+    text = (raw or "").strip()
+    return None if not text or text.upper().replace("/", "") == "NA" else text
 
 
 def _amount(text: str) -> float | None:
@@ -93,9 +103,14 @@ def parse_tabulation(text: str) -> dict[str, Any] | None:
         bid = _BID_LINE.match(line)
         if not bid:
             continue
+        head = bid.group("head").strip()
+        status = _TRAILING_STATUS.search(head)
+        if status:
+            head = head[:status.start()].strip()
         bidders.append({
-            "vendor_name": bid.group("name").strip(),
-            "lbe_status": (bid.group("lbe") or "").strip() or None,
+            "vendor_name": head,
+            # "N/A" is the page saying there is no status, which is not a status.
+            "lbe_status": _status(status.group("status") if status else None),
             "bid_amount_raw": f"${bid.group('amount')}",
             "bid_amount": _amount(bid.group("amount")),
             "listed_position": len(bidders) + 1,
