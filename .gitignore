@@ -6,3 +6,10 @@ build/
 data/raw/
 *.pyc
 
+*.egg-info/
+build_docs/
+PLAN.txt
+# Agent scratch, except the rubric self-assessment docs/READING_ORDER.md routes to.
+# Written as tasks/* so git still descends into the directory and sees the negation.
+tasks/*
+!tasks/todo.md
