@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gov_procurement_documents",
+  "description": "PROPOSED CONTRACT - not an export of Chromie's production schema. Authored from the pattern table in README.md; the trial author confirmed on 2026-09-08 that no separate snapshot is coming. Validating against this proves internal consistency of the trial's own outputs, and makes no claim of production compatibility. Assumptions and validation gaps: docs/supabase_mapping.md.",
+  "type": "object",
+  "required": [
+    "id",
+    "record_id",
+    "source_ref",
+    "displayed_filename",
+    "processing_state"
+  ],
+  "properties": {
+    "id": {
+      "type": [
+        "string"
+      ]
+    },
+    "record_id": {
+      "type": [
+        "string"
+      ]
+    },
+    "source_ref": {
+      "type": [
+        "string"
+      ]
+    },
+    "document_role": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "displayed_filename": {
+      "type": [
+        "string"
+      ]
+    },
+    "official_url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_page": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "content_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "bytes": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "sha256": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "published_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "retrieved_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "download_status": {
+      "type": [
+        "string"
+      ]
+    },
+    "processing_state": {
+      "type": [
+        "string"
+      ]
+    },
+    "validation_notes": {
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "filename_solicitation_mismatch": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

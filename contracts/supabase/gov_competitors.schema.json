@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gov_competitors",
+  "description": "PROPOSED CONTRACT - not an export of Chromie's production schema. Authored from the pattern table in README.md; the trial author confirmed on 2026-09-08 that no separate snapshot is coming. Validating against this proves internal consistency of the trial's own outputs, and makes no claim of production compatibility. Assumptions and validation gaps: docs/supabase_mapping.md.",
+  "type": "object",
+  "required": [
+    "id",
+    "legal_name_normalized",
+    "profile_status"
+  ],
+  "properties": {
+    "id": {
+      "type": [
+        "string"
+      ]
+    },
+    "source_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "external_source_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "legal_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "legal_name_normalized": {
+      "type": [
+        "string"
+      ]
+    },
+    "aliases": {
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "public_identifiers": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "certifications": {
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "profile_status": {
+      "type": [
+        "string"
+      ]
+    },
+    "derived_profile": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "identity_confidence": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "observed_at": {
+      "type": [
+        "string"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

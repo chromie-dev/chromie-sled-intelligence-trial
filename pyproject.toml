@@ -6,10 +6,15 @@ build-backend = "setuptools.build_meta"
 name = "chromie-sled-intelligence-trial"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "pdfplumber>=0.11",
+    "jsonschema>=4",
+    "openpyxl>=3.1",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+ocr = ["pytesseract>=0.3", "pdf2image>=1.17"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

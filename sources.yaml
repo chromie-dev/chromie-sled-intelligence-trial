@@ -1,11 +1,197 @@
+# California source surfaces for the SLED competitive-intelligence trial.
+#
+# Generated from sources/source_registry.csv, which holds the full 18-field access
+# research. Regenerate rather than hand-edit so the two cannot drift apart.
+#
+# Replaces the original fixture entries, which belonged to the superseded
+# PROJECT_BRIEF.md and were confirmed stale by the trial author on 2026-09-08.
+#
+# mode is how the pipeline reaches a surface, not a feature toggle:
+#   live                    - plain HTTP, verified, in use
+#   manual                  - public but needs a person (login we do not use, or email request)
+#   blocked_pending_decision - technically reachable, permission question unresolved
+#   unresolved              - could not be characterised
+#   dead_end                - recorded so it is not retried
+#
 sources:
-  - id: ca_city_portal
-    mode: fixture
-    jurisdiction: California city
-  - id: ga_county_portal
-    mode: fixture
-    jurisdiction: Georgia county
-  - id: school_district_portal
-    mode: fixture
-    jurisdiction: Public school district
+  - id: caleprocure_event_list
+    mode: live
+    jurisdiction: California (state)
+    portal: Cal eProcure
+    name: Active event list (PeopleSoft AUC_RESP_INQ_AUC)
+    provides: solicitations
+    access_method: HTML (server-rendered PeopleSoft component)
+    auth_required: no
+    official_url: https://caleprocure.ca.gov/psc/psfpd1/SUPPLIER/ERP/c/AUC_MANAGE_BIDS.AUC_RESP_INQ_AUC.GBL
+    verified_on: 2026-09-07
+    known_gaps: >-
+      active-only, so disappearance is the ONLY closure signal - a failed run must record 'no signal', never 'all closed'. No attachments in this response
 
+  - id: caleprocure_event_detail
+    mode: live
+    jurisdiction: California (state)
+    portal: Cal eProcure
+    name: Event detail (AUC_RESP_INQ_DTL)
+    provides: solicitations
+    access_method: HTML (deterministic GET, no postback)
+    auth_required: no
+    official_url: https://caleprocure.ca.gov/psc/psfpd1/SUPPLIER/ERP/c/AUC_MANAGE_BIDS.AUC_RESP_INQ_DTL.GBL?Page=AUC_RESP_INQ_DTL&Action=U&AUC_ID=<id>&AUC_ROUND=1&BIDDER_ID=BID0000001&BIDDER_LOC=1&BIDDER_SETID=STATE&BIDDER_TYPE=B&BUSINESS_UNIT=<bu>
+    verified_on: 2026-09-07
+    known_gaps: >-
+      attachment filenames are NOT in this HTML; addendum history is free text needing parsing
+
+  - id: caleprocure_event_package
+    mode: live
+    jurisdiction: California (state)
+    portal: Cal eProcure
+    name: Event attachments (package postback + signed view URL)
+    provides: documents
+    access_method: HTML postback chain + signed GET (plain HTTP, no browser)
+    auth_required: no
+    official_url: POST .../AUC_RESP_INQ_DTL.GBL ICAction=RESP_INQ_DL0_WK_AUC_DOWNLOAD_PB then ICAction=PV_ATTACH_WRK_SCM_DOWNLOAD$N then GET the window.open URL
+    verified_on: 2026-09-07
+    known_gaps: >-
+      signed view URL is per-request and not durable, so it cannot be cached as a permanent locator. Grid uses double-quoted attributes unlike the rest of the page - a single-quote regex returns zero rows and mimics 'no attachments'. Filename-prefix role convention unvalidated beyond one agency
+
+  - id: caleprocure_vendor_ads
+    mode: live
+    jurisdiction: California (state)
+    portal: Cal eProcure
+    name: Event vendor ads (Prime Seeking Sub / Sub Seeking Prime)
+    provides: declared interest
+    access_method: HTML via postback
+    auth_required: no
+    official_url: POST .../AUC_RESP_INQ_DTL.GBL with ICAction=ZZ_VNDR_AD_WRK_VENDOR_DETAILS_PB
+    verified_on: 2026-09-07
+    known_gaps: >-
+      ONLY CA source tying a named company to a specific solicitation. But: contact is a person, no supplier_id, company name only in free text -> fuzzy match to SCPRS. Generic bid-assistance ads recur across unrelated events and must be discounted
+
+  - id: caleprocure_response_bid_inquiry
+    mode: dead_end
+    jurisdiction: California (state)
+    portal: Cal eProcure
+    name: Response Bid Inquiry (respondent fields)
+    provides: responses/bidders
+    access_method: manual-only
+    auth_required: YES - 302 to ?cmd=login&errorPg=ckreq
+    official_url: https://caleprocure.ca.gov/psc/psfpd1/SUPPLIER/ERP/c/AUC_MANAGE_BIDS.AUC_RESP_INQ_AUC.GBL?page=AUC_RESP_INQ_AUC
+    verified_on: 2026-09-07
+    known_gaps: >-
+      This is the answer to the brief's central question: California does not publicly disclose bidder identities here. Fallback is bid-tabulation and intent-to-award PDFs posted as event attachments, then SCPRS awardees, then expenditure-derived participation.
+
+  - id: caleprocure_scprs
+    mode: live
+    jurisdiction: California (state)
+    portal: Cal eProcure
+    name: SCPRS award registry (ZZ_PO.ZZ_SCPRS1_CMP)
+    provides: awards/contracts
+    access_method: HTML (GET then search POST with ICSID/ICStateNum)
+    auth_required: no
+    official_url: https://caleprocure.ca.gov/psc/psfpd1/SUPPLIER/ERP/c/ZZ_PO.ZZ_SCPRS1_CMP.GBL?FolderPath=PORTAL_ROOT_OBJECT.ZZ_FISCAL_SCPRS.ZZ_SCPRS1_CMP_GBL&IsFolder=false&IgnoreParamTempl=FolderPath%2cIsFolder
+    verified_on: 2026-09-07
+    known_gaps: >-
+      pagination past row 200 unresolved (NEXT control does not advance under automation); workaround is date/department slicing. No bidder set, only awardees
+
+  - id: caleprocure_supplier_search
+    mode: live
+    jurisdiction: California (state)
+    portal: Cal eProcure
+    name: Supplier search (ZZ_PO.ZZ_PUBSRCH)
+    provides: suppliers/certifications/location
+    access_method: HTML (bare .GBL, then ICAction=ZZ_PUBSRCH1_WRK_BUTTON)
+    auth_required: no
+    official_url: https://caleprocure.ca.gov/psc/psfpd1/SUPPLIER/ERP/c/ZZ_PO.ZZ_PUBSRCH.GBL
+    verified_on: 2026-09-09
+    known_gaps: >-
+      ANSWERS THE GEOGRAPHY GAP - city, postal code and street address per supplier. Component is titled 'Custom Component for SB orDVBE' so coverage may be limited to certification-registered suppliers rather than all state suppliers; must be measured. No supplier_id in results, so the join to SCPRS is by name and inherits that weakness.
+
+  - id: caleprocure_lpa
+    mode: live
+    jurisdiction: California (state)
+    portal: Cal eProcure
+    name: Leveraged Procurement Agreement search (ZZ_PO.ZZ_CNT_SRC_CMP_BKP)
+    provides: contracts/purchasing vehicles
+    access_method: HTML (bare .GBL, then ICAction=ZZ_CTR_SRC2_WRK_SEARCH_BTN)
+    auth_required: no
+    official_url: https://caleprocure.ca.gov/psc/psfpd1/SUPPLIER/ERP/c/ZZ_PO.ZZ_CNT_SRC_CMP_BKP.GBL
+    verified_on: 2026-09-09
+    known_gaps: >-
+      POPULATES THE 'presence on a statewide contract or purchasing vehicle' PREDICTION FEATURE, which predict.py scores but has always evaluated to zero. Joins on identifier rather than name - the only surface besides SCPRS where that is true.
+
+  - id: caleprocure_payment_search
+    mode: live
+    jurisdiction: California (state)
+    portal: Cal eProcure
+    name: FI$Cal Payment Progress Search (ZZ_PO.ZZ_PMNTSRCH_PG)
+    provides: payments
+    access_method: HTML
+    auth_required: no
+    official_url: https://caleprocure.ca.gov/psc/psfpd1/SUPPLIER/ERP/c/ZZ_PO.ZZ_PMNTSRCH_PG.GBL?PORTALPARAM_PTCNAV=ZZ_PMNTSRCH_PG_GBL&EOPP.SCNode=ERP&EOPP.SCPortal=SUPPLIER&EOPP.SCName=ADMN_PUBLIC_SEARCH&EOPP.SCPTcname=PT_PTPP_SCFNAV_BASEPAGE_SCR&FolderPath=PORTAL_ROOT_OBJECT.PORTAL_BASE_DATA.CO_NAVIGATION_COLLECTIONS.ADMN_PUBLIC_SEARCH.ADMN_S201504300556127137858824&IsFolder=false
+    verified_on: 2026-09-07
+    known_gaps: >-
+      distinguishes holding a contract from being actively paid under it - real incumbency corroboration. Field extraction still to map
+
+  - id: openfiscal_dept_vendor_tx
+    mode: live
+    jurisdiction: California (state)
+    portal: Open FI$Cal
+    name: Department vendor transactions (bulk CSV)
+    provides: expenditures
+    access_method: download (direct CSV via published pointer manifest)
+    auth_required: no
+    official_url: https://open.fiscal.ca.gov/dept_vendor_transaction.html
+    verified_on: 2026-09-07
+    known_gaps: >-
+      payments only - no bidders, no solicitation ids. VENDOR_NAME truncated ~30 chars, so join to SCPRS supplier_id by name with low confidence. document_id is a FI$Cal voucher ref; join to SCPRS purchase_doc UNPROVEN. 10.6GB total, selective fetch required
+
+  - id: data_ca_gov_purchase_orders
+    mode: blocked_pending_decision
+    jurisdiction: California (state)
+    portal: data.ca.gov (CKAN Datastore)
+    name: Purchase Order Data (DGS) - historical inference corpus
+    provides: awards/purchase orders
+    access_method: API (datastore_search_sql) - ROBOTS CONFLICT, see constraints
+    auth_required: no
+    official_url: https://data.ca.gov/dataset/purchase-order-data
+    verified_on: 2026-09-07
+    known_gaps: >-
+      ~11 years stale - inference corpus only, never a current-incumbent source; age must enter confidence. Total Price is text with $ and padding so sums need cleaning
+
+  - id: dgs_historical_contracts
+    mode: dead_end
+    jurisdiction: California (state)
+    portal: DGS
+    name: SCPRS/CSCR historical contracts data
+    provides: contracts/awards
+    access_method: manual-only (email request)
+    auth_required: no
+    official_url: https://www.dgs.ca.gov/en/PD/Resources/Page-Content/Procurement-Division-Resources-List-Folder/SCPRS-CSCR-Historical-Contracts-Data
+    verified_on: 2026-09-07
+    known_gaps: >-
+      README treats this as a bulk seed; it is not one any more. Use SCPRS live search + data.ca.gov corpus instead
+
+  - id: suppliers_fiscal_peoplesoft
+    mode: unresolved
+    jurisdiction: California (state)
+    portal: FI$Cal supplier portal
+    name: PeopleSoft components on the backend host
+    provides: contracts/payments
+    access_method: unreachable
+    auth_required: unknown
+    official_url: https://suppliers.fiscal.ca.gov/psc/psfpd1/SUPPLIER/ERP/c/ZZ_PO.ZZ_SCPRS1_CMP.GBL
+    verified_on: 2026-09-07
+    known_gaps: >-
+      Not needed: caleprocure.ca.gov reverse-proxies the same application, so the backend host is redundant. Retained so the timeout is not re-investigated.
+
+  - id: caleprocure_aspx_wrapper
+    mode: dead_end
+    jurisdiction: California (state)
+    portal: Cal eProcure
+    name: Public .aspx search pages (InFlight/NLX wrapper) - DO NOT USE
+    provides: n/a
+    access_method: browser-only
+    auth_required: no
+    official_url: https://caleprocure.ca.gov/pages/public-search.aspx
+    verified_on: 2026-09-07
+    known_gaps: >-
+      RECORDED AS A DEAD END so it is not retried. These wrap the PeopleSoft components above - always target the .GBL component directly

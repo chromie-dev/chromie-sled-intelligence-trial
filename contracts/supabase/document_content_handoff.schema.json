@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "document_content_handoff",
+  "description": "PROPOSED CONTRACT - not an export of Chromie's production schema. Authored from the pattern table in README.md; the trial author confirmed on 2026-09-08 that no separate snapshot is coming. Validating against this proves internal consistency of the trial's own outputs, and makes no claim of production compatibility. Assumptions and validation gaps: docs/supabase_mapping.md.",
+  "type": "object",
+  "required": [
+    "id",
+    "document_id",
+    "page",
+    "extraction_method"
+  ],
+  "properties": {
+    "id": {
+      "type": [
+        "string"
+      ]
+    },
+    "document_id": {
+      "type": [
+        "string"
+      ]
+    },
+    "page": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "extraction_method": {
+      "type": [
+        "string"
+      ]
+    },
+    "text": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "char_count": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "ocr_confidence": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "table_count": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "table_row_counts": {
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "warnings": {
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "sha256": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

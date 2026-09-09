@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "partner_match_payloads",
+  "description": "PROPOSED CONTRACT - not an export of Chromie's production schema. Authored from the pattern table in README.md; the trial author confirmed on 2026-09-08 that no separate snapshot is coming. Validating against this proves internal consistency of the trial's own outputs, and makes no claim of production compatibility. Assumptions and validation gaps: docs/supabase_mapping.md.",
+  "type": "object",
+  "required": [
+    "id",
+    "record_id",
+    "engine_version",
+    "generated_at",
+    "results"
+  ],
+  "properties": {
+    "id": {
+      "type": [
+        "string"
+      ]
+    },
+    "record_id": {
+      "type": [
+        "string"
+      ]
+    },
+    "recommended_direction": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "preview": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "results": {
+      "type": "array"
+    },
+    "source_summary": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "engine_version": {
+      "type": [
+        "string"
+      ]
+    },
+    "generated_at": {
+      "type": [
+        "string"
+      ]
+    },
+    "expires_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "production_ids_unresolved": {
+      "type": [
+        "array",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": true
+}
