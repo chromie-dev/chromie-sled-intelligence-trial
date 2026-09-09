@@ -1858,3 +1858,70 @@ than half-built, and the review queue carries all 211 rows as
 This covers business unit 2660, 81 of 359 events. PlanetBids was in maintenance during the
 probe and remains the largest untested source; board-agenda bid tabulations need OCR. Both
 are recorded in the entry above rather than claimed here.
+
+## 2026-09-09 — PlanetBids is behind a bot challenge; SF Public Works is the open substitute
+
+The earlier probe recorded PlanetBids as untested because the platform was in maintenance.
+Retested today, and the answer is not "down" but "closed to automation".
+
+### The measurement
+
+`pbsystem.planetbids.com/portal/<id>/*` 302s to `vendors.planetbids.com`, which answers
+**HTTP 405 with an AWS WAF "Human Verification" interstitial** — `window.awsWafCookieDomainList`
+and a `gokuProps` challenge token — served through CloudFront. The challenge appears with a
+normal desktop browser user-agent, not only to a bare client, so it is bot detection rather
+than a user-agent filter. Reproduced on two portal ids (39497, 15300) and both hostnames.
+
+`https://pbsystem.planetbids.com/robots.txt` returns the maintenance page under HTTP 200
+rather than a robots file, so **no crawl permission can be read from the site at all** —
+there is no directive to comply with, which is not the same as permission.
+
+### Ruling: not automatable, and not to be worked around
+
+A WAF human-verification challenge is an access control. README permits inspecting public
+browser network requests and explicitly forbids bypassing "authentication, CAPTCHA, access
+controls, rate limits, or terms of use"; SECURITY.md says the same. Solving or evading the
+challenge is therefore out of scope regardless of the data being public to a person in a
+browser. Recorded as a demonstrated access limitation, which is what the brief asks for
+when a source prevents collection.
+
+The compliant routes, none of them automation: a person may open a portal and read results;
+an agency or PlanetBids may grant API access on request; CPRA reaches any specific
+tabulation. This is the strongest position available without permission.
+
+### The substitute, found while testing the fallback
+
+**San Francisco Public Works publishes a full bid tabulation as a text-layer PDF.** From
+`Item 5b_PWC No 35 Traffic Signals attach 2026-4-30.pdf`, retrieved anonymously:
+
+```
+TABULATION OF BIDS      SOURCING ID: 0000002270
+BIDDERS (in the order received & opened):  LBE Status        Total Bid Price
+Bay Area Lightworks, Inc.                  Small-LBE 10%     $7,200,000.00
+Liffey Electric                            Micro-LBE 10%     $7,215,619.50
+A. Ruiz Construction                       Micro-LBE 10%     $9,001,119.88
+Average Bid: $7,805,579.79     Engineer's Estimate: $9,200,000.00
+```
+
+Every bidder, a local-business-enterprise status, prices, and an engineer's estimate — which
+is a benchmark Caltrans results do not carry. Native text, so no OCR. It also cites a
+per-bid **subcontractor listing** at `bidopportunities.apps.sfdpw.org`, and subcontracting
+is the dimension `vendors.build_profile` currently records as unobservable. That host
+refuses connections from this environment, so the subcontractor claim is unverified.
+
+### Environment caveat on the negative results
+
+`stancounty.com`, `pfm.sbcounty.gov`, `webapps.sfpuc.org` and `bidopportunities.apps.sfdpw.org`
+all returned connection failures (curl exit 7, no HTTP status) from this host, while
+`sfpublicworks.org` and `dot.ca.gov` served normally. That pattern points at egress
+filtering here rather than at the sources, so those four are unmeasured, not unavailable.
+Anyone re-running this should retest them from an unrestricted network before concluding
+anything.
+
+### Ranking after this probe
+
+1. **Caltrans bid results** — built, 211 observations, exact join.
+2. **SF Public Works tabulations** — open, text-layer, adds engineer's estimate and a
+   subcontractor path. The next thing worth building.
+3. **Board-agenda tabulations** — reachable but scanned, needs the OCR fallback.
+4. **PlanetBids** — largest agency coverage, closed to automation without permission.
