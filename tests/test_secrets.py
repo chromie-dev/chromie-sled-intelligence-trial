@@ -8,6 +8,7 @@ into, because printing the value to make the message friendlier would put it in 
 which is the same leak the test exists to prevent.
 """
 import pathlib
+import re
 import subprocess
 import unittest
 
@@ -105,6 +106,39 @@ class LeakTests(unittest.TestCase):
                 if value in text:
                     leaks.append(f"{name} -> {rel}")
         self.assertEqual(leaks, [], f"credential leaked into: {leaks}")
+
+    def test_no_fixture_carries_third_party_credential_material(self) -> None:
+        """A captured page can contain someone else's credentials, not just ours.
+
+        Everything above scans for values from our own .env, which is the wrong shape
+        for this: a fixture saved from a live portal carried two AWS S3 pre-signed URLs
+        that CSU's own site had served. Temporary, read-only and expired within the
+        hour, but credential material in a repo regardless, and GitHub's scanner found
+        it before any test here did.
+
+        Saving a real response is the right way to build a fixture -- guessing at the
+        markup is how three parsers shipped green and returned nothing. So the fixture
+        stays real and the signing material comes out.
+        """
+        patterns = {
+            "AWS temporary key id": re.compile(r"\bASIA[0-9A-Z]{12,}"),
+            "AWS access key id": re.compile(r"\bAKIA[0-9A-Z]{12,}"),
+            "pre-signed signature": re.compile(r"X-Amz-(Signature|Security-Token|Credential)",
+                                               re.I),
+            "bearer token": re.compile(r"Authorization:\s*(Bearer|Basic)\s+\S{8,}", re.I),
+            "private key block": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+        }
+        found = []
+        for path in sorted(pathlib.Path(__file__).parent.glob("fixtures/**/*")):
+            if not path.is_file():
+                continue
+            text = path.read_text(errors="replace")
+            for label, pattern in patterns.items():
+                if pattern.search(text):
+                    found.append(f"{path.name}: {label}")
+        self.assertEqual(found, [],
+                         "credential material in a checked-in fixture; strip the "
+                         "signing parameters and keep the rest of the capture")
 
     def test_a_planted_secret_would_actually_be_found(self) -> None:
         # Guards the guard: if `searchable_files` ever stops walking anything, the two
