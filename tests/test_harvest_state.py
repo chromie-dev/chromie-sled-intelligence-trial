@@ -139,12 +139,21 @@ class DaysHeldTests(unittest.TestCase):
                                     "09/01/2026", "09/03/2026"),
             ["09/01/2026", "09/02/2026"])
 
-    def test_a_multi_day_range_is_not_a_day(self) -> None:
-        # A bisected range delegates to its halves; counting it as covered would call
-        # a window finished on the strength of work that was handed off.
+    def test_a_recorded_range_covers_every_day_in_it(self) -> None:
+        # Only a slice that answered is recorded: a bisected parent delegates and is
+        # written down by neither itself nor as a range. So a range in the state file
+        # came back under the cap and really did cover those dates. Counting single
+        # days only reported 4% for a run that had finished more than that.
         state = self._state("from=09/01/2026|to=09/03/2026")
         self.assertEqual(hs.days_held(state, "caleprocure_scprs",
-                                                 "09/01/2026", "09/03/2026"), [])
+                                      "09/01/2026", "09/03/2026"),
+                         ["09/01/2026", "09/02/2026", "09/03/2026"])
+
+    def test_a_range_is_clipped_to_the_window_asked_about(self) -> None:
+        state = self._state("from=08/30/2026|to=09/02/2026")
+        self.assertEqual(hs.days_held(state, "caleprocure_scprs",
+                                      "09/01/2026", "09/30/2026"),
+                         ["09/01/2026", "09/02/2026"])
 
     def test_days_outside_the_window_are_not_counted(self) -> None:
         state = self._state("from=08/31/2026|to=08/31/2026",

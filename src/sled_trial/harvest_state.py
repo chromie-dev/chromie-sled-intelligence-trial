@@ -117,14 +117,23 @@ def days_held(state: dict[str, Any], source_key: str,
         if entry.get("outcome") not in DONE:
             continue
         parts = dict(p.split("=", 1) for p in str(key).split("|") if "=" in p)
-        if parts.get("from") != parts.get("to") or "from" not in parts:
+        if "from" not in parts or "to" not in parts:
             continue
         try:
-            day = dt.datetime.strptime(parts["from"], "%m/%d/%Y").date()
+            first = dt.datetime.strptime(parts["from"], "%m/%d/%Y").date()
+            last = dt.datetime.strptime(parts["to"], "%m/%d/%Y").date()
         except ValueError:
             continue
-        if start <= day <= end:
-            seen.add(day)
+        # A recorded range covers every day in it. Only a slice that answered is ever
+        # recorded -- a bisected parent hands its work to its halves and is written
+        # down by neither -- so a range in the state file is a terminal slice that came
+        # back under the cap, not a parent standing in for children. Counting only
+        # single days undercounted a run that had in fact finished those dates.
+        day = first
+        while day <= last:
+            if start <= day <= end:
+                seen.add(day)
+            day += dt.timedelta(days=1)
     return [d.strftime("%m/%d/%Y") for d in sorted(seen)]
 
 
