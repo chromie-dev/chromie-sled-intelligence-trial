@@ -810,7 +810,7 @@ def cmd_backfill_awards(args: argparse.Namespace) -> int:
     for index, (start, end) in enumerate(windows, 1):
         print(f"\n  [{index}/{len(windows)}] {start} .. {end}")
         try:
-            _, coverage = sweep_awards(session, outdir, start, end,
+            _, coverage = sweep_awards(session, outdir, start, end, load=False,
                                        say=lambda m: print(f"        {m}"))
         except KeyboardInterrupt:
             # Everything up to here is on disk and recorded. Stopping is a supported
@@ -841,7 +841,8 @@ def cmd_backfill_awards(args: argparse.Namespace) -> int:
 
 
 def sweep_awards(session, outdir: pathlib.Path, window_from: str, window_to: str,
-                 *, say=print) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+                 *, say=print, load: bool = True,
+                 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Collect SCPRS awards over one date window, resumably.
 
     Shared by `analyze`, which sweeps a single opportunity's context window, and
@@ -926,17 +927,25 @@ def sweep_awards(session, outdir: pathlib.Path, window_from: str, window_to: str
     # file already holds this run's slices appended to whatever an earlier run left,
     # so this is both the dedupe and the resume carry-over in one pass. Last wins,
     # so a row fetched now replaces the cached copy of the same award.
-    # ponytail: reads the whole corpus once at the end. If the window ever outgrows
-    # memory at that point, stream it through a temp file keyed on award_key.
-    awards = list({assemble.award_key(r): r
-                   for r in assemble._read_jsonl(cached)}.values())
-    documents.write_jsonl(awards, cached)
+    # A backfill never looks at the rows -- it collects them for a later run -- so it
+    # deduplicates on disk and holds nothing. `analyze` needs them in memory for
+    # lineage, prediction and profiles, and pays for that knowingly. Measured: the
+    # parsed form cost 17.5 MB at 9k rows and would reach ~116 MB across a year, on a
+    # machine that killed this process twice for memory.
+    if load:
+        awards = list({assemble.award_key(r): r
+                       for r in assemble._read_jsonl(cached)}.values())
+        documents.write_jsonl(awards, cached)
+        on_disk = len(awards)
+    else:
+        awards = []
+        on_disk = assemble.dedupe_jsonl(cached, assemble.award_key)
     # Written after the rows, and always -- a verdict is only worth publishing next
     # to the corpus it describes.
     coverage_path.write_text(json.dumps(assemble.award_coverage_verdict(
-        coverage, existing_coverage, rows_on_disk=len(awards), held=len(done),
+        coverage, existing_coverage, rows_on_disk=on_disk, held=len(done),
         window={"from": window_from, "to": window_to}), indent=1, default=str))
-    say(f"{len(awards)} award rows on disk")
+    say(f"{on_disk} award rows on disk")
     return awards, coverage
 
 

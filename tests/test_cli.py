@@ -510,6 +510,73 @@ class SavedContextTests(unittest.TestCase):
         self.assertEqual(_StubReader.last_kwargs.get("context_id"), "ctx-abc123")
 
 
+class StreamingDedupeTests(unittest.TestCase):
+    """A backfill must not hold the corpus it is collecting."""
+
+    def test_last_occurrence_wins_as_it_did_when_parsed(self) -> None:
+        from sled_trial import assemble as a
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "awards.jsonl"
+            path.write_text("".join(json.dumps(r) + "\n" for r in [
+                {"purchase_doc": "D1", "supplier_id": "V1", "awarded_amt": "$1.00"},
+                {"purchase_doc": "D2", "supplier_id": "V2", "awarded_amt": "$2.00"},
+                {"purchase_doc": "D1", "supplier_id": "V1", "awarded_amt": "$9.99"},
+            ]))
+            kept = a.dedupe_jsonl(path, a.award_key)
+            rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        self.assertEqual(kept, 2)
+        self.assertEqual({r["purchase_doc"]: r["awarded_amt"] for r in rows},
+                         {"D1": "$9.99", "D2": "$2.00"},
+                         "a row fetched later must replace the cached copy")
+
+    def test_it_holds_lines_not_parsed_rows(self) -> None:
+        # The point of the exercise: parsed dicts cost 17.5 MB at 9k rows and would
+        # reach ~116 MB across a year, on a machine that killed this twice.
+        import tracemalloc
+
+        from sled_trial import assemble as a
+        rows = [{"purchase_doc": f"D{i}", "supplier_id": f"V{i}",
+                 "supplier_name": f"VENDOR NUMBER {i}", "department": "Some Department",
+                 "category": "IT Goods", "awarded_amt": "$1,234.00"}
+                for i in range(4000)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "awards.jsonl"
+            path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+            tracemalloc.start()
+            a.dedupe_jsonl(path, a.award_key)
+            streamed = tracemalloc.get_traced_memory()[1]
+            tracemalloc.stop()
+            tracemalloc.start()
+            parsed = {a.award_key(r): r for r in a._read_jsonl(path)}
+            in_memory = tracemalloc.get_traced_memory()[1]
+            tracemalloc.stop()
+        self.assertLess(streamed, in_memory,
+                        f"streaming used {streamed} vs parsed {in_memory}")
+        self.assertEqual(len(parsed), 4000)
+
+    def test_a_missing_cache_is_not_an_error(self) -> None:
+        from sled_trial import assemble as a
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(
+                a.dedupe_jsonl(pathlib.Path(tmp) / "nothing.jsonl", a.award_key), 0)
+
+    def test_the_original_survives_a_kill_mid_dedupe(self) -> None:
+        # Written to a sibling and renamed, so a half-written corpus never replaces a
+        # whole one.
+        from unittest import mock
+
+        from sled_trial import assemble as a
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "awards.jsonl"
+            original = json.dumps({"purchase_doc": "D1", "supplier_id": "V1"}) + "\n"
+            path.write_text(original)
+            with mock.patch.object(
+                    pathlib.Path, "replace", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    a.dedupe_jsonl(path, a.award_key)
+            self.assertEqual(path.read_text(), original)
+
+
 class MonthWindowTests(unittest.TestCase):
     """A backfill is walked in calendar months so a stopped run is still describable."""
 
@@ -562,7 +629,7 @@ class BackfillAwardsTests(unittest.TestCase):
         from unittest import mock
         swept = []
 
-        def fake(session, outdir, start, end, *, say=print):
+        def fake(session, outdir, start, end, *, say=print, load=True):
             swept.append((start, end))
             return [], {"rows_collected": 1, "rows_reported_by_portal": 1,
                         "complete": True, "slices": 1}
@@ -584,7 +651,7 @@ class BackfillAwardsTests(unittest.TestCase):
         from unittest import mock
         seen = []
 
-        def fake(session, outdir, start, end, *, say=print):
+        def fake(session, outdir, start, end, *, say=print, load=True):
             seen.append(start)
             if start == "08/01/2026":
                 raise RuntimeError("portal timed out")
@@ -607,7 +674,7 @@ class BackfillAwardsTests(unittest.TestCase):
             (pathlib.Path(tmp) / "awards.jsonl").write_text("")
             with mock.patch.object(cli, "_session", lambda a: object()), \
                     mock.patch.object(cli, "sweep_awards",
-                                      lambda s, o, a, b, say=print: (
+                                      lambda s, o, a, b, say=print, load=True: (
                                           seen.append(a), ([], {"complete": True}))[1]):
                 cli.cmd_backfill_awards(self._args(tmp, months=2))
         self.assertEqual(seen, ["09/01/2026", "08/01/2026"])

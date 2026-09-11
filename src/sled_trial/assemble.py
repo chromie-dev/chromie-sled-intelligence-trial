@@ -135,6 +135,34 @@ def declared_interest_key(row: dict[str, Any]) -> tuple[Any, Any, Any, Any]:
             row.get("vendor_name_raw"), row.get("interest_direction"))
 
 
+def dedupe_jsonl(path: pathlib.Path, key: Any) -> int:
+    """Collapse a JSONL cache to one row per key in place, last occurrence winning.
+
+    Holds one raw *line* per key rather than one parsed dict. Measured on the live
+    cache: 9,047 rows cost 17.5 MB parsed, which extrapolates to about 116 MB across a
+    twelve-month backfill -- on a machine that has killed this process twice for
+    memory. The line is what gets written back, so parsing it a second time is cheaper
+    than keeping it parsed.
+
+    Written to a sibling file and renamed, so a kill mid-dedupe leaves the original
+    intact rather than a half-written corpus.
+    """
+    path = pathlib.Path(path)
+    if not path.exists():
+        return 0
+    kept: dict[Any, str] = {}
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                kept[key(json.loads(line))] = line
+    scratch = path.with_suffix(path.suffix + ".dedupe")
+    with scratch.open("w", encoding="utf-8") as handle:
+        for line in kept.values():
+            handle.write(line if line.endswith("\n") else line + "\n")
+    scratch.replace(path)
+    return len(kept)
+
+
 def award_key(row: dict[str, Any]) -> tuple[Any, Any]:
     """Identity of one SCPRS award row, the natural key the sweep dedupes on."""
     return (row.get("purchase_doc"), row.get("supplier_id"))
