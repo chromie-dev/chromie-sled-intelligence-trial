@@ -233,13 +233,25 @@ def search_date_sliced(
             note(key, "failed", 0)
             failures.append({"slice": this, "error": f"{type(exc).__name__}: {exc}"})
             continue
-        note(key, "ok" if result["rows"] else "empty", len(result["rows"]))
+        # Recorded only where this slice is the one that answered. A parent that hands
+        # its work to children must stay unrecorded until -- and unless -- those
+        # children are all done, because the caller checkpoints per slice and a key on
+        # disk means "never ask this again".
+        #
+        # Noting here recorded every capped parent, including the whole window, before
+        # anything was bisected. `slice_key` ignores depth, so a resume popped
+        # from=08/27/2026|to=09/03/2026, found it held, and exited having done nothing
+        # -- with no child ever pushed and no failure reported.
         result["slice"] = {"from": _s(start), "to": _s(end), "depth": depth, **pinned}
         result["slice_key"] = key
         if not result["truncated"] or depth >= max_depth or start >= end:
             if result["truncated"] and axis_i < len(axes):
                 field, values = axes[axis_i]
                 covered = 0
+                # A child pushed back for a further axis is finished in a later
+                # iteration under its own key. Recording the parent would skip the day
+                # on resume without ever re-pushing that child.
+                deferred = False
                 for value in values:
                     child_pinned = {**pinned, field: value}
                     sub = search(session, from_date=_s(start), to_date=_s(end),
@@ -252,6 +264,7 @@ def search_date_sliced(
                         # the next axis rather than written off -- writing it off is how
                         # rows go missing without anything saying so.
                         stack.append((start, end, depth, child_pinned, axis_i + 1))
+                        deferred = True
                         continue
                     if sub["truncated"]:
                         sub["shortfall_note"] = (
@@ -271,6 +284,8 @@ def search_date_sliced(
                     + ("Every reported row is accounted for."
                        if covered >= reported else
                        f"{reported - covered} row(s) are still unaccounted for."))
+                if not deferred:
+                    note(key, "ok" if covered else "empty", covered)
                 yield result
                 continue
             if result["truncated"]:
@@ -279,6 +294,7 @@ def search_date_sliced(
                     f"{result['total_reported']} rows above the {PAGE_LIMIT} cap "
                     f"at depth {depth}"
                     + ("" if axes else "; pass subdivide_by to go further"))
+            note(key, "ok" if result["rows"] else "empty", len(result["rows"]))
             yield result
             continue
         middle = start + (end - start) / 2

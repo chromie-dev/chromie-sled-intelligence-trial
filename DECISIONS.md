@@ -6,7 +6,9 @@ shaped the way it is. Organised by subject rather than by date.
 ---
 
 ## 1. The central question: who bid?
-**Cal eProcure does not publish bidder lists, and this is now tested .** The Response Bid Inquiry component was recorded as login-gated. It is not: it
+
+**Cal eProcure does not publish bidder lists, and this is now tested rather than
+inferred.** The Response Bid Inquiry component was recorded as login-gated. It is not: it
 answers anonymously over plain HTTP. Signed in as a registered supplier it returns the same
 event grid, with no respondent column and no respondent field anywhere in the page — and
 signing in actively *breaks* the event detail the pipeline depends on, which is pinned to
@@ -61,9 +63,11 @@ The example is kept because its intent-to-award PDF is the only document in the 
 naming a bidder against a specific solicitation.
 
 **Vendor advertisements** are the remaining solicitation-specific signal: a `Prime Seeking
-Sub` post is a company declaring intent to bid on a named event. Reachable, not yet
-harvested, and classified `declared_interest` — never `known_bidder`, because the ad names a
-person and no supplier id.
+Sub` post is a company declaring intent to bid on a named event. Harvested across the whole
+open feed — 356 events read, 98 carrying an ad, 106 ads, none failing — of which 11 are
+prime-seeking-sub. Classified `declared_interest`, never `known_bidder`, because the ad names
+a person and no supplier id; 14 are generic bid-assistance copy and are flagged rather than
+counted as interest.
 
 ---
 

@@ -260,6 +260,93 @@ class BusinessUnitAxisTests(unittest.TestCase):
                   {"business_unit": "2660"}, {"business_unit": ""}, {}]
         self.assertEqual(scprs.observed_business_units(events), ["2660", "7760"])
 
+class OnlyTheSliceThatAnsweredIsRecordedTests(unittest.TestCase):
+    """A slice may only be recorded when it is the one that answered.
+
+    The caller checkpoints per slice, so a key on disk means "never ask this again".
+    Recording a parent that has delegated its work turns a resume into a silent skip.
+    Reproduced against the live state file: every capped parent was recorded, including
+    `from=08/27/2026|to=09/03/2026` -- the whole window -- so a resume popped the root,
+    found it held, and exited having fetched nothing and reported nothing.
+    """
+
+    def _bisecting_search(self):
+        """A range over the cap until it is a single day. Forces bisection."""
+        def search(session, **criteria):
+            frm, to = criteria["from_date"], criteria["to_date"]
+            rows, total = (5, 5) if frm == to else (200, 400)
+            return {"criteria": dict(criteria), "rows": [{"n": i} for i in range(rows)],
+                    "pager": (1, rows, total), "total_reported": total,
+                    "truncated": total > rows, "no_results": False}
+        return search
+
+    def _run(self, search, frm, to, **kwargs):
+        noted = {}
+        original = scprs.search
+        scprs.search = search
+        try:
+            out = list(scprs.search_date_sliced(
+                None, frm, to,
+                on_slice=lambda k, outcome, rows: noted.__setitem__(k, (outcome, rows)),
+                **kwargs))
+        finally:
+            scprs.search = original
+        return out, noted
+
+    def test_a_bisected_parent_is_never_recorded(self) -> None:
+        _, noted = self._run(self._bisecting_search(), "09/01/2026", "09/04/2026")
+        self.assertNotIn("from=09/01/2026|to=09/04/2026", noted,
+                         "the whole window was recorded before anything was fetched; "
+                         "a resume would skip the entire sweep")
+        self.assertTrue(noted, "the days that did answer must still be recorded")
+        for key in noted:
+            frm = key.split("|")[0].removeprefix("from=")
+            to = key.split("|")[1].removeprefix("to=")
+            self.assertEqual(frm, to, f"{key} is a range, so it delegated to children")
+
+    def test_a_resume_after_a_full_sweep_asks_for_nothing(self) -> None:
+        # The other half of the contract: recording too little would refetch forever.
+        _, noted = self._run(self._bisecting_search(), "09/01/2026", "09/04/2026")
+        out, again = self._run(self._bisecting_search(), "09/01/2026", "09/04/2026",
+                               skip=list(noted))
+        self.assertEqual(out, [], "a fully-held sweep refetched work it already had")
+
+    def test_a_subdivided_parent_with_a_deferred_child_is_not_recorded(self) -> None:
+        # A child pushed back for a second axis finishes in a later iteration under its
+        # own key. Recording the parent skips the day on resume and that child is never
+        # pushed again.
+        def search(session, **criteria):
+            acq, bu = criteria.get("acq_method"), criteria.get("business_unit")
+            if acq is None:
+                rows, total = 200, 300        # the day, over the cap
+            elif bu is None:
+                rows, total = (200, 260) if acq == "A" else (100, 100)
+            else:
+                rows, total = 50, 50
+            return {"criteria": dict(criteria), "rows": [{"n": i} for i in range(rows)],
+                    "pager": (1, rows, total), "total_reported": total,
+                    "truncated": total > rows, "no_results": False}
+
+        _, noted = self._run(search, "09/02/2026", "09/02/2026",
+                             subdivide_by=[("acq_method", ["A", "B"]),
+                                           ("business_unit", ["2660"])])
+        self.assertNotIn("from=09/02/2026|to=09/02/2026", noted,
+                         "recorded the day while one of its children was still pending")
+
+    def test_a_subdivided_parent_with_no_deferred_child_is_recorded(self) -> None:
+        def search(session, **criteria):
+            acq = criteria.get("acq_method")
+            rows, total = (200, 300) if acq is None else (150, 150)
+            return {"criteria": dict(criteria), "rows": [{"n": i} for i in range(rows)],
+                    "pager": (1, rows, total), "total_reported": total,
+                    "truncated": total > rows, "no_results": False}
+
+        _, noted = self._run(search, "09/02/2026", "09/02/2026",
+                             subdivide_by=("acq_method", ["A", "B"]))
+        self.assertEqual(noted.get("from=09/02/2026|to=09/02/2026"), ("ok", 300),
+                         "every child answered, so the day is done and must be held")
+
+
 class ResumableSweepTests(unittest.TestCase):
     """The award sweep is the last long transaction with no resume.
 

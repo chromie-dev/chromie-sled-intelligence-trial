@@ -128,8 +128,6 @@ cost a day to find and is the single most useful thing in this document.
 - **Gaps and caveats:** POPULATES THE 'presence on a statewide contract or purchasing vehicle' PREDICTION FEATURE, which predict.py scores but has always evaluated to zero. Joins on identifier rather than name - the only surface besides SCPRS where that is true.
 
 
-## Verified, not yet harvested
-
 ### Event vendor ads (Prime Seeking Sub / Sub Seeking Prime)
 
 - Endpoint we call: `POST .../AUC_RESP_INQ_DTL.GBL with ICAction=ZZ_VNDR_AD_WRK_VENDOR_DETAILS_PB`
@@ -139,8 +137,13 @@ cost a day to find and is the single most useful thing in this document.
 - When it becomes public: when the ad is placed
 - History available: ad create/update timestamps
 - Stable identifiers: joins on (ZZ_VNDR_AD_TBL_BUSINESS_UNIT, ZZ_VNDR_AD_TBL_AUC_ID)
-- Verified: 2026-09-07
+- Verified: 2026-09-11
+- Collected: 106 ads across 98 of 356 events read; 258 events stated no ad; 0 failures
+- Of those, 11 are `prime_seeking_sub` — a company stating it means to bid that event
+- Command: `python -m sled_trial.cli vendor-ads`
 - **Gaps and caveats:** ONLY CA source tying a named company to a specific solicitation. But: contact is a person, no supplier_id, company name only in free text -> fuzzy match to SCPRS. Generic bid-assistance ads recur across unrelated events and must be discounted
+
+## Verified, not yet harvested
 
 ### FI$Cal Payment Progress Search (ZZ_PO.ZZ_PMNTSRCH_PG)
 
