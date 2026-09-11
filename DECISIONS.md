@@ -6,9 +6,7 @@ shaped the way it is. Organised by subject rather than by date.
 ---
 
 ## 1. The central question: who bid?
-
-**Cal eProcure does not publish bidder lists, and this is now tested rather than
-inferred.** The Response Bid Inquiry component was recorded as login-gated. It is not: it
+**Cal eProcure does not publish bidder lists, and this is now tested .** The Response Bid Inquiry component was recorded as login-gated. It is not: it
 answers anonymously over plain HTTP. Signed in as a registered supplier it returns the same
 event grid, with no respondent column and no respondent field anywhere in the page — and
 signing in actively *breaks* the event detail the pipeline depends on, which is pinned to
@@ -21,7 +19,7 @@ That is the finding the work turned on:
 | Surface | What it gives | Scale |
 | --- | --- | --- |
 | PlanetBids agency portals | Every respondent with amount and certifications, **plus planholders**, keyed by a stable platform vendor id | 1,845 bidders and 25,090 planholders over 3 agencies; 1,269 and 10,538 distinct vendors |
-| Caltrans weekly bid results | Every bidder, ranked, with amount and Small Business status | 211 observations over 13 weeks |
+| Caltrans weekly bid results | Every bidder, ranked, with amount and Small Business status | 836 observations over 53 weeks (2025-09-07 to 2026-09-06) |
 | SF Public Works tabulations | Every bidder, local-business status, price, **engineer's estimate** | 21 observations |
 | Award-notice PDFs on Cal eProcure events | The awardee and the winning amount | 1 observation |
 
@@ -201,7 +199,7 @@ tagged by `source_key` and business unit so the two are never read as one pool.
 ## 5. What the data cannot support
 
 **Win rates, except where a full field was observed.** SCPRS records who won and is silent on
-who lost, so a rate is computable only over solicitations where a bidder list exists. 24
+who lost, so a rate is computable only over solicitations where a bidder list exists. 40
 profiles carry one; every one is flagged `small_sample`, because each rests on one or two
 solicitations. Elsewhere the rate stays null with the reason attached rather than being faked
 by equating bids with wins.
@@ -212,12 +210,19 @@ by equating bids with wins.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 974 rows, 6-day window | 55 | 0.0727 | 0.0606 | ±0.0435 | 45 |
 | 1,252 rows, 7-day window | 64 | 0.0573 | 0.0625 | ±0.0308 | 53 |
+| 4,088 rows, 8-day window | 64 | 0.0625 | 0.0469 | ±0.0350 | 53 |
 
-The gap between the two is 0.0154, inside either interval, and precision@5 moves the other
-way. These are the same measurement twice. At this size, with four fifths of events scoring
-zero, the evaluation cannot resolve whether the ranking beats counting past wins. The shipped
-headline is the 7-day figure because that is what the documented command produces with no
-flags; quoting the other would mean choosing a window after seeing which scored better.
+Three measurements of the same thing. The spread across them is 0.0154, inside every one of
+those intervals, and precision@5 moves the opposite way to precision@3 between the second and
+third. The third row beats its baseline where the second lost to it, on a corpus three times
+deeper — and that is still not a result, because 53 of 64 events score exactly zero and the
+interval swallows the difference. The evaluation cannot resolve whether the ranking beats
+counting past wins.
+
+The shipped headline is whatever the documented command produces with no flags, currently the
+8-day figure. Quoting a window chosen after seeing which scored best is the failure mode this
+table exists to prevent, and the second row is kept precisely because it is the one where the
+model lost.
 
 An earlier figure of 0.17 was withdrawn for exactly that reason: it was measured on the ten
 held-out events with the deepest prior history, which are the most predictable. The unselected
@@ -271,7 +276,10 @@ low bidder.
 empty template, and a migrated Caltrans endpoint returns HTTP 200 with a "not found" page.
 Zero rows means "no page", never "no bids that week", and the adapters distinguish the two.
 
-**Acquisition measured at 100%** on the current corpus: 84 documents, 863 pages. File types are
+**Acquisition measured at 98.8%** on the current corpus: 83 of 84 documents, 863 pages. The one
+failure is classified rather than dropped — a `.docx` whose payload ended with HTML, an error
+page appended to a partial download, caught because the bytes are checked against the type
+they claim. File types are
 not PDF-only — the corpus includes `.docx`, `.xlsx`, `.zip` and `.csv`, so extraction cannot
 assume PDF.
 
@@ -295,26 +303,37 @@ products; the README carries the rubric and wins where they conflict.
 
 Closed since the first pass: the SCPRS subdivision axis (now two axes, taking the sweep from
 roughly a quarter of the portal's reported rows to 96.9%, with the residual measured rather
-than estimated); statewide contract vehicles; and the supplier location index. Vendor
-advertisements are half-closed: the parser reads both boards and flags bid-assistance ads
-rather than counting them as interest, but no command harvests them yet — item 5 below.
+than estimated); statewide contract vehicles; the supplier location index; vendor
+advertisements, now harvested across every event in the feed — 356 read, 98 carrying an ad,
+none failing; and evidence-link validation, which runs on every analyze and fails the run
+loudly when a citation leads nowhere.
 
-1. **Backfill twelve months.** The machinery is built — harvests resume rather than restart,
-   and an empty unit is distinguished from a failed one — but the backfill has not been run.
-   This is the only item with a clock on it: Caltrans keeps roughly nine months, so history
-   not collected is lost permanently rather than deferred.
-2. **A complete CSLB register**, which is the bridge between the three identifier namespaces.
-   Blocked on a server-side download ceiling; the by-classification route is unsolved.
+Caltrans bidder history is also backfilled: 53 weeks, 2025-09-07 to 2026-09-06. That was the
+item with a clock on it, because the site keeps roughly nine months and uncollected history
+is lost rather than deferred. It is collected.
+
+1. **Twelve months of award history.** The bidder half of the backfill is done; the award
+   sweep still covers eight days. The machinery is ready — harvests resume rather than
+   restart, an empty unit is distinguished from a failed one, and rows checkpoint to disk per
+   slice so a killed run costs a slice — but at the observed rate a serial year is roughly 65
+   hours. Four sessions, each with its own PeopleSoft state chain, brings that to about 16.
+   This is the largest remaining gap between what was asked and what exists.
+2. **A complete CSLB register**, the bridge between the three identifier namespaces. Blocked
+   on a server-side download ceiling at 59,873 of roughly 290,000 rows; the by-classification
+   route is unsolved. Nothing yet reads the register even for the rows we hold, so the
+   licence-number join it exists for is built but not connected.
 3. **PlanetBids document bytes.** Metadata, URLs, the login gate and the recalled flag are
    harvested; the files themselves sit behind the same protection as the API and need the
    browser transport.
-4. **Lineage and evidence-link validation** across the new sources — the least-started item
-   in the brief.
-5. **Vendor ads, harvested.** The adapter parses both boards; a command that fetches each
-   event's detail page and fires the `ZZ_VNDR_AD_WRK_VENDOR_DETAILS_PB` postback is about
-   thirty lines and is not written.
-6. SF subcontractor listings, which would populate the one profile dimension still empty.
-7. Predecessor search across every RFP in the evaluation set; it currently runs on the
-   demonstrated event only.
-8. A solicitation-level evaluation set assembled from award-notice documents, and the
+4. **Lineage across the new sources.** Evidence-link validation is now built and passing;
+   lineage still only understands the state surfaces.
+5. SF subcontractor listings, which would populate the one profile dimension still empty.
+6. Predecessor search across every RFP in the evaluation set; it currently runs on the
+   demonstrated event only. Worth doing after item 1 rather than before — lineage searches
+   the award corpus, and on eight days of history it would find almost nothing.
+7. A solicitation-level evaluation set assembled from award-notice documents, and the
    forward-window prediction target to replace the same-day one.
+8. **Respondents and incumbents.** Four of the brief's six participation states are exported
+   — awardee, known bidder, planholder and interested vendor. A respondent is distinguishable
+   from a planholder only where a portal publishes both, and incumbency is currently inferred
+   through lineage rather than recorded as a role.
