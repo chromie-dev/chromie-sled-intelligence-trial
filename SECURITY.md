@@ -1,7 +1,7 @@
 # Trial data boundary
 
 Allowed: repository fixtures, generated outputs, and publicly accessible procurement
-sources documented in `sources.yaml`.
+sources documented in `sources/source_registry.csv`.
 
 Forbidden: Chromie production/staging databases, Supabase projects, internal APIs,
 customer files, customer prompts, secrets, production schemas, copied database dumps, and

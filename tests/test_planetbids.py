@@ -278,6 +278,28 @@ class CommandTests(unittest.TestCase):
                                        "planetbids_declared_interest.jsonl",
                                        "planetbids_coverage.json"})
 
+    def test_a_subset_run_keeps_the_other_agencies_rows(self) -> None:
+        # Running one agency must add to the cache, not replace the two harvested before.
+        import argparse
+        import json
+        import pathlib
+        import tempfile
+        from unittest import mock
+
+        from sled_trial import cli
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = pathlib.Path(tmp) / "planetbids_bidders.jsonl"
+            cache.write_text(json.dumps({"business_unit": "PB99999", "event_id": "1",
+                                         "vendor_name_raw": "Other Agency Vendor"}) + "\n")
+            with mock.patch("sled_trial.net.browser.PortalJsonReader",
+                            self._fake_reader()):
+                cli.cmd_planetbids(argparse.Namespace(
+                    output=tmp, agency=["14424"], max_bids=None, delay=0,
+                    local_browser=False))
+            units = {json.loads(l)["business_unit"] for l in cache.read_text().splitlines()}
+            self.assertEqual(units, {"PB99999", "PB14424"})
+
     def test_the_source_is_registered_so_the_pipeline_can_find_it(self) -> None:
         from sled_trial import sources
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 from .caleprocure import CalEProcureSession, COMP, _text
 
@@ -168,10 +168,23 @@ def observed_business_units(events: Iterable[dict[str, Any]]) -> list[str]:
                    for e in events} - {""})
 
 
+def slice_key(slice_: dict[str, Any]) -> str:
+    """A stable name for one question asked of the portal.
+
+    The date range plus any pinned criteria, and deliberately not the bisection depth:
+    depth records how a range was reached, not what was asked, so keying on it would
+    make a resumed sweep refetch everything it already holds.
+    """
+    parts = [f"{k}={slice_[k]}" for k in sorted(slice_) if k != "depth"]
+    return "|".join(parts)
+
+
 def search_date_sliced(
     session: CalEProcureSession, from_date: str, to_date: str,
     *, max_depth: int = 8,
     subdivide_by: tuple[str, list[str]] | list[tuple[str, list[str]]] | None = None,
+    skip: Iterable[str] = (),
+    on_slice: Callable[[str, str, int], None] | None = None,
     **criteria: str,
 ) -> Iterator[dict[str, Any]]:
     """Bisect a date range until each slice fits under the grid's 200-row cap.
@@ -201,11 +214,28 @@ def search_date_sliced(
     # (start, end, depth, pinned criteria, index of the next axis to try)
     stack: list[tuple[dt.date, dt.date, int, dict[str, str], int]] = [
         (_d(from_date), _d(to_date), 0, {}, 0)]
+    held = {str(k) for k in skip}
+    failures: list[dict[str, Any]] = []
+    note = on_slice or (lambda key, outcome, rows: None)
     while stack:
         start, end, depth, pinned, axis_i = stack.pop()
         active = {**criteria, **pinned}
-        result = search(session, from_date=_s(start), to_date=_s(end), **active)
+        this = {"from": _s(start), "to": _s(end), **pinned}
+        key = slice_key(this)
+        if key in held:
+            continue
+        try:
+            result = search(session, from_date=_s(start), to_date=_s(end), **active)
+        except Exception as exc:
+            # A slice that failed must stay pending, and must not take the rest of the
+            # sweep with it. Losing ninety minutes because one request broke is what
+            # made this harvest fragile.
+            note(key, "failed", 0)
+            failures.append({"slice": this, "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        note(key, "ok" if result["rows"] else "empty", len(result["rows"]))
         result["slice"] = {"from": _s(start), "to": _s(end), "depth": depth, **pinned}
+        result["slice_key"] = key
         if not result["truncated"] or depth >= max_depth or start >= end:
             if result["truncated"] and axis_i < len(axes):
                 field, values = axes[axis_i]

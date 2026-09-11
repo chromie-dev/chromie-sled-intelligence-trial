@@ -29,6 +29,13 @@ def _money(value: Any) -> str:
     return "not stated" if value is None else f"${value:,.2f}"
 
 
+def _gap(model: float | None, baseline: float | None) -> str:
+    """The distance between model and baseline, for prose that must not go stale."""
+    if model is None or baseline is None:
+        return "gap"
+    return f"{abs(float(model) - float(baseline)):.4f}"
+
+
 def _fmt(value: Any) -> str:
     if value is None:
         return "not measured"
@@ -76,8 +83,8 @@ def generate() -> str:
     w("")
     w("A pipeline that takes a California solicitation and returns a competitive picture:")
     w("who is credibly in this market, who is likely to compete, which companies could")
-    w("prime the work, and what evidence supports each claim. It runs over plain HTTP with")
-    w("no browser, no API key and no credentials.")
+    w("prime the work, and what evidence supports each claim. The state surfaces run over")
+    w("plain HTTP with no login; the PlanetBids agency portals need a real browser session.")
     w("")
     w("| Stage | Result |")
     w("| --- | --- |")
@@ -97,9 +104,14 @@ def generate() -> str:
     w("competed**. Individual agencies are a different matter, and that split shapes every")
     w("conclusion here.")
     w("")
-    w("- On Cal eProcure the bid-inquiry surface that would name respondents requires a")
-    w("  login, so it is out of bounds. No planholder lists, bidder lists or pre-bid")
-    w("  attendance records are public there.")
+    w("- Cal eProcure's bid-inquiry surface exposes no respondent fields, anonymously or")
+    w("  signed in as a supplier: a bidder inquires about its own responses, not anyone")
+    w("  else's. No planholder or bidder list exists on the state portal.")
+    w("- **PlanetBids agency portals are the largest bidder source.** Cities, counties and")
+    w("  districts publish every respondent with amount and certifications, plus the")
+    w("  planholders who took out documents, keyed by a stable platform vendor id. It is a")
+    w("  rendered single-page app, so it is the one surface read through a browser, and")
+    w("  its terms restrict commercial reuse rather than automated access.")
     w("- **Caltrans is the exception, and it is a large one.** It posts every bidder on a")
     w("  solicitation, ranked, with amounts and Small Business preference, on a public")
     w("  weekly page within about twenty minutes of the bid opening. Losing bidders")
@@ -117,8 +129,9 @@ def generate() -> str:
     w("  formats, and nobody has aggregated them.")
     w("- Award history, by contrast, is rich and queryable, and each supplier carries a")
     w("  stable identifier, so vendor identity is resolvable without guesswork.")
-    w("- Named participants therefore come from **documents**, not from portal fields:")
-    w("  intent-to-award notices attached to events state the winning company and its price.")
+    w("- On the state portal itself, named participants come from **documents**, not from")
+    w("  portal fields: intent-to-award notices attached to events state the winning")
+    w("  company and its price.")
     w("")
     if awards:
         w(f"Of {_fmt(len(awards))} award records ingested, {_fmt(competitive)} were awarded through an")
@@ -171,14 +184,19 @@ def generate() -> str:
             w(f"| Model lift over that baseline | "
               f"{_fmt(comparison.get('lift_over_best_baseline'))}x |")
             w("")
+            # Derived, never written down. Two lift figures used to be hardcoded here
+            # from particular runs; they outlived the corpus that produced them and the
+            # report went on quoting them next to numbers that disagreed.
+            gap = _gap(evaluation.get("precision_at_3"),
+                       comparison.get("best_baseline_precision_at_3"))
             w("**Read the lift as undetermined, not as a result.** Most events score exactly")
             w("zero, so the per-event spread swamps the mean: at this sample size the 95%")
             w("confidence interval on precision@3 is roughly plus or minus 0.03 to 0.04,")
-            w("wider than the gap between the model and the baseline. On a seven-day award")
-            w("window the lift is 0.92x; on a six-day window it is 1.20x, and those two")
-            w("figures are not distinguishable from each other. This evaluation is too small")
-            w("and too zero-heavy to say whether the ranking beats counting past wins.")
-            w("Quoting either number without that caveat would be the misleading choice.")
+            w(f"wider than the {gap} that separates the model from the baseline. The lift")
+            w("has swung either side of 1.0 as the award window and the corpus changed,")
+            w("with the ranking itself untouched. This evaluation is too small and too")
+            w("zero-heavy to say whether the ranking beats counting past wins. Quoting")
+            w("the lift without that caveat would be the misleading choice.")
         w("")
     w("These are weak numbers and are reported unadjusted. Two structural causes, both about")
     w("the data rather than the ranking:")

@@ -33,7 +33,7 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
-from .caleprocure import EVENT_DETAIL_URL, _text
+from .caleprocure import EVENT_DETAIL_URL, _text, detail_url, fetch_detail
 
 ACTION = "ZZ_VNDR_AD_WRK_VENDOR_DETAILS_PB"
 SOURCE_KEY = "caleprocure_vendor_ads"
@@ -168,9 +168,29 @@ def declared_interest_rows(parsed: dict[str, Any]) -> list[dict[str, Any]]:
                 "supplier_id": None,
                 "identity_confidence": "unresolved",
                 "source_key": SOURCE_KEY,
-                "evidence_url": EVENT_DETAIL_URL,
+                # The event's own detail page, not the bare component URL. Every ad
+                # used to cite the same generic address, so following a citation landed
+                # on the portal rather than on the solicitation the ad was posted
+                # against. The ad board itself is a postback with no address of its
+                # own; the detail page is where a reviewer reaches it from.
+                "evidence_url": detail_url(bu, eid) if bu and eid else EVENT_DETAIL_URL,
+                "evidence_note": ("the ad board is reached by firing "
+                                  f"{ACTION} on this page"),
             })
     return rows
+
+
+def read_ad_page(session, business_unit: str, event_id: str) -> str:
+    """The View Vendor Ad page for one event.
+
+    Same ordering constraint as the attachment postback: PeopleSoft validates
+    ICStateNum against the currently rendered page, so the detail GET is not optional.
+    Skipping it returns a session page, which parses as "no ads" -- a failure wearing
+    the stated-absence answer, which is the one confusion this module exists to avoid.
+    """
+    fetch_detail(session, business_unit, event_id)
+    body, _ = session.post_action(ACTION, detail_url(business_unit, event_id))
+    return body.decode("utf-8", "replace")
 
 
 def harvest(fetch_ad_page, events: Iterable[dict[str, str]], *,

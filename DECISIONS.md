@@ -119,7 +119,10 @@ similarity — and is surfaced as `inferred`, never `confirmed`.
 
 ## 3. Access, as measured
 
-Everything the pipeline uses is anonymous HTTP. No browser, no API key, no credential.
+Every Cal eProcure surface, and every other state and local source but one, is anonymous
+HTTP: no login, no API key. The exception is PlanetBids, a rendered single-page app whose
+API answers a bare client with 403, so it is read through a real Chrome session (local, or
+hosted through Browserbase) issuing the same GETs the page itself makes. Still no login.
 
 - **Bare `.GBL` components are public.** The bid-inquiry URL form given in the brief redirects
   to a login; the same component without that query string does not.
@@ -134,11 +137,14 @@ Everything the pipeline uses is anonymous HTTP. No browser, no API key, no crede
   with 8-15 attachments return a session page while events with 2 succeed.
 
 **Grid caps are the binding constraint.** SCPRS returns at most 200 rows and its pager does not
-advance under automation, so a wider query must be sliced rather than paged. On the reference
-window 6 of 7 date slices still hit the cap: **1,252 rows collected against 3,789 the portal
-reported.** `build/awards_coverage.json` records which slices fell short and by how much. The
-remedy is a second subdivision axis, not a wider window — widening only adds days that cap in
-turn. Not yet implemented.
+advance under automation, so a wider query must be sliced rather than paged. Date bisection
+alone left the reference window at 1,252 rows against 3,789 reported, with 6 of 7 single-day
+slices still capped. Two further axes now cut a capped day — acquisition method first, then
+business unit — and completeness is measured against the portal's own total rather than
+assumed: **4,769 rows collected against 4,924 reported (96.9%)**, with the 6 residual slices
+that still exceed the cap after both axes named in `build/awards_coverage.json`. The sweep
+also resumes: a slice that answered is not asked again, a slice that failed stays pending,
+and the rows already cached are carried rather than rewritten.
 
 ---
 
@@ -289,8 +295,9 @@ products; the README carries the rubric and wins where they conflict.
 
 Closed since the first pass: the SCPRS subdivision axis (now two axes, taking the sweep from
 roughly a quarter of the portal's reported rows to 96.9%, with the residual measured rather
-than estimated); vendor advertisements, both boards, with bid-assistance ads flagged rather
-than counted as interest; and statewide contract vehicles.
+than estimated); statewide contract vehicles; and the supplier location index. Vendor
+advertisements are half-closed: the parser reads both boards and flags bid-assistance ads
+rather than counting them as interest, but no command harvests them yet — item 5 below.
 
 1. **Backfill twelve months.** The machinery is built — harvests resume rather than restart,
    and an empty unit is distinguished from a failed one — but the backfill has not been run.
@@ -303,8 +310,11 @@ than counted as interest; and statewide contract vehicles.
    browser transport.
 4. **Lineage and evidence-link validation** across the new sources — the least-started item
    in the brief.
-5. SF subcontractor listings, which would populate the one profile dimension still empty.
-6. Predecessor search across every RFP in the evaluation set; it currently runs on the
+5. **Vendor ads, harvested.** The adapter parses both boards; a command that fetches each
+   event's detail page and fires the `ZZ_VNDR_AD_WRK_VENDOR_DETAILS_PB` postback is about
+   thirty lines and is not written.
+6. SF subcontractor listings, which would populate the one profile dimension still empty.
+7. Predecessor search across every RFP in the evaluation set; it currently runs on the
    demonstrated event only.
-7. A solicitation-level evaluation set assembled from award-notice documents, and the
+8. A solicitation-level evaluation set assembled from award-notice documents, and the
    forward-window prediction target to replace the same-day one.

@@ -44,7 +44,6 @@ CRITERIA = {
 # filter inputs. A first version keyed rows off the highest index across every family, which
 # reported 6 results and stapled unrelated business types and certifications onto suppliers.
 # Parsing one family is both correct and simpler.
-RESULT_FAMILY = "ZZ_PUBSRCH_VW_"
 FIELDS = {
     "supplier_name": "ZZ_PUBSRCH_VW_ZZ_NAME1",
     "supplier_name_alt": "ZZ_PUBSRCH_VW_ZZ_NAME1_AC",
@@ -155,7 +154,7 @@ def search(session: CalEProcureSession, **criteria: str) -> dict[str, Any]:
     }
 
 
-def location_index(session: CalEProcureSession, names: "Iterable[str]",
+def location_index(session: CalEProcureSession, names: Iterable[str],
                    *, on_progress: Any = None) -> dict[str, Any]:
     """Look each vendor name up and build the name-keyed index the profiles read.
 

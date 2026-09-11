@@ -5,7 +5,6 @@ Everything here is pure: rows in, rows out, no network and no argparse.
 """
 from __future__ import annotations
 
-import collections
 import csv
 import datetime as dt
 import json
@@ -101,10 +100,48 @@ def _merge_rows(existing: list[dict[str, Any]], fresh: list[dict[str, Any]],
     return list(merged.values())
 
 
+def merge_cache(outdir: pathlib.Path, filename: str, fresh: list[dict[str, Any]],
+                *, key: Any) -> list[dict[str, Any]]:
+    """Fold fresh rows into a build-directory cache and write it back.
+
+    Every harvester cache is a corpus built up over runs -- a resumed sweep, one more
+    agency, another set of commission pages. Writing only this run's rows replaced the
+    corpus with its latest slice: a fully-resumed `bidders` run really did rewrite its
+    cache to zero rows. Every cache write goes through here so that cannot be done one
+    file at a time.
+    """
+    merged = _merge_rows(_read_jsonl(outdir / filename), fresh, key=key)
+    documents.write_jsonl(merged, outdir / filename)
+    return merged
+
+
+def bidder_key(row: dict[str, Any]) -> tuple[Any, Any, Any]:
+    """Identity of one observed-bidder row: the solicitation plus the name as printed."""
+    return (row.get("business_unit"), row.get("event_id"), row.get("vendor_name_raw"))
+
+
+# Every build-directory cache that holds declared interest rather than a bid.
+DECLARED_INTEREST_CACHES = ("planetbids_declared_interest.jsonl",
+                            "vendor_ads_declared_interest.jsonl")
+
+
+def declared_interest_key(row: dict[str, Any]) -> tuple[Any, Any, Any, Any]:
+    """Identity of one declared-interest row.
+
+    The board is part of the key: the same company can post on both boards of one
+    event, and those are two different statements about it.
+    """
+    return (row.get("business_unit"), row.get("event_id"),
+            row.get("vendor_name_raw"), row.get("interest_direction"))
+
+
+def award_key(row: dict[str, Any]) -> tuple[Any, Any]:
+    """Identity of one SCPRS award row, the natural key the sweep dedupes on."""
+    return (row.get("purchase_doc"), row.get("supplier_id"))
+
+
 def _source_coverage(registry_csv: str = "sources/source_registry.csv") -> dict[str, Any]:
     """What each source provides, when it becomes public, freshness, access and gaps."""
-    import csv
-
     path = pathlib.Path(registry_csv)
     if not path.exists():
         return {"sources": [], "note": f"{registry_csv} not present"}
@@ -145,16 +182,24 @@ def _opportunity_intelligence(
 ) -> dict[str, Any]:
     """Assemble the opportunity debrief: facts, predictions and gaps kept separate."""
     retrieved = [d for d in documents_manifest if d.get("download_status") == "downloaded"]
+    # `known` is every observed participant in the corpus, because the export needs them
+    # all. The debrief is about one solicitation, so only its rows belong under this
+    # heading: the first real run shipped 2,703 bidders from 614 other events here.
+    target = (opportunity.get("business_unit"), opportunity.get("event_id"))
+    here = [row for row in known
+            if (row.get("business_unit"), row.get("event_id")) == target]
     return {
         "generated_at": documents.utc_now(),
         "opportunity": {k: v for k, v in opportunity.items() if not k.startswith("_")},
         "known_bidders": {
-            "count": len(known),
+            "count": len(here),
             "evidence_class": "observed",
-            "basis": "named in an official document attached to this event, with an amount",
-            "participants": known,
-            "note": ("empty means no attached document named a participant. It does not "
-                     "mean nobody bid: California publishes no bidder lists."),
+            "basis": ("named against this solicitation by an official source: a document "
+                      "table carrying an amount, or an agency bid-results page"),
+            "participants": here,
+            "note": ("empty means no official source named a participant on this event. "
+                     "It does not mean nobody bid: the state portal publishes awardees, "
+                     "not bidder fields, and only some agencies publish theirs."),
         },
         "likely_bidders": {
             "count": len(prediction.get("predictions", [])),
@@ -180,10 +225,14 @@ def _opportunity_intelligence(
             "document_hashes": [d.get("sha256") for d in retrieved if d.get("sha256")],
         },
         "data_gaps": [
-            "no public bidder or planholder list exists for California solicitations",
-            "the response bid inquiry surface requires a login and was not accessed",
+            "Cal eProcure publishes no bidder or planholder list; bidder fields come from "
+            "agency surfaces (Caltrans, SF Public Works, PlanetBids) and award-notice "
+            "documents",
+            "the response bid inquiry surface exposes no respondent fields, anonymously or "
+            "with a supplier login (tested 2026-09-10)",
             "no deterministic join exists from this solicitation to its eventual award",
-            "vendor ads for this event were not harvested in this run",
+            "vendor ads for this event were not harvested: the adapter exists but no "
+            "command runs it yet",
         ],
     }
 
@@ -216,12 +265,10 @@ def merge_document_corpus(outdir: pathlib.Path, manifest: list[dict[str, Any]],
     opportunity afterwards once cut 84 documents down to 8. Deduplicated on
     (document, hash) and (document, page).
     """
-    manifest = _merge_rows(_read_jsonl(outdir / "documents_manifest.jsonl"), manifest,
+    manifest = merge_cache(outdir, "documents_manifest.jsonl", manifest,
                            key=lambda r: (r.get("document_ref"), r.get("sha256")))
-    pages = _merge_rows(_read_jsonl(outdir / "document_pages.jsonl"), pages,
+    pages = merge_cache(outdir, "document_pages.jsonl", pages,
                         key=lambda r: (r.get("document_ref"), r.get("page")))
-    documents.write_jsonl(manifest, outdir / "documents_manifest.jsonl")
-    documents.write_jsonl(pages, outdir / "document_pages.jsonl")
     return manifest, pages
 
 
@@ -236,10 +283,9 @@ def observed_participants(document_candidates: list[dict[str, Any]],
     """
     rows = list(document_candidates)
     cached = [row for cache in bidder_caches() for row in _read_jsonl(outdir / cache)]
-    seen = {(r.get("business_unit"), r.get("event_id"), r.get("vendor_name_raw"))
-            for r in rows}
+    seen = {bidder_key(r) for r in rows}
     for row in cached:
-        key = (row.get("business_unit"), row.get("event_id"), row.get("vendor_name_raw"))
+        key = bidder_key(row)
         if key in seen:
             continue
         seen.add(key)
@@ -306,9 +352,9 @@ def profile_corpus(awards: list[dict[str, Any]],
     if not extra:
         return list(awards)
     merged = list(awards)
-    seen = {(r.get("purchase_doc"), r.get("supplier_id")) for r in merged}
+    seen = {award_key(r) for r in merged}
     for row in extra:
-        key = (row.get("purchase_doc"), row.get("supplier_id"))
+        key = award_key(row)
         if key in seen:
             continue
         seen.add(key)
@@ -329,6 +375,51 @@ def default_awards_from(cutoff: str) -> str:
     return (end - dt.timedelta(days=DEFAULT_AWARD_WINDOW_DAYS)).strftime("%m/%d/%Y")
 
 
+def _end(note: str | None) -> str:
+    """Close a note off so the next sentence does not run into it."""
+    note = (note or "").strip()
+    return note if not note or note.endswith((".", "!", "?")) else note + "."
+
+
+def award_coverage_verdict(fresh: dict[str, Any], existing: dict[str, Any] | None, *,
+                           rows_on_disk: int, held: int,
+                           window: dict[str, str]) -> dict[str, Any]:
+    """The award-sweep verdict to publish, never one that disagrees with the rows.
+
+    A fully-resumed run measures nothing new, so the earlier run's reconciliation is
+    what stands -- writing a vacuous "0 slices, complete" over it would throw away the
+    only real measurement. But leaving it untouched is its own lie: the file claimed
+    4,769 rows collected while awards.jsonl next to it held 4,288, because the sweep
+    that produced the 4,769 died before writing its rows. Carry it forward, stamp it as
+    not re-measured, and always state what is actually on disk.
+    """
+    measured_now = bool(fresh.get("slices"))
+    verdict = dict(fresh if measured_now else (existing or fresh))
+    verdict["window"] = window
+    verdict["rows_on_disk"] = rows_on_disk
+    verdict["measured_this_run"] = measured_now
+    if held:
+        verdict["slices_held_from_earlier_runs"] = held
+    if not measured_now:
+        verdict["note"] = (_end(verdict.get("note")) +
+                           f" Every slice was already held, so nothing was re-measured "
+                           f"against portal totals this run; the reconciliation above "
+                           f"predates the {rows_on_disk} rows now on disk.").strip()
+    elif held:
+        verdict["note"] = (_end(verdict.get("note")) +
+                           f" {held} slice(s) held from an earlier run were not "
+                           f"re-measured; this verdict covers the slices fetched "
+                           f"now.").strip()
+    return verdict
+
+
+def _slice_rows(result: dict[str, Any]) -> int:
+    """How many rows one sweep slice produced, however the caller recorded it."""
+    if result.get("rows_collected") is not None:
+        return int(result["rows_collected"])
+    return len(result.get("rows") or [])
+
+
 def award_sweep_coverage(results: list[dict[str, Any]]) -> dict[str, Any]:
     """What the award sweep actually collected against what the portal said existed.
 
@@ -338,7 +429,9 @@ def award_sweep_coverage(results: list[dict[str, Any]]) -> dict[str, Any]:
     complete one -- the same class of silence as a soft-404 reading as "no results".
     """
     truncated = [r for r in results if r.get("truncated")]
-    collected = sum(len(r.get("rows") or []) for r in results)
+    # `rows_collected` is what the sweep now records: rows are checkpointed to disk
+    # per slice rather than carried, so the slice record holds the tally, not the rows.
+    collected = sum(_slice_rows(r) for r in results)
     reported = sum(int(r.get("total_reported") or 0) for r in results)
     return {
         "slices": len(results),
@@ -347,7 +440,7 @@ def award_sweep_coverage(results: list[dict[str, Any]]) -> dict[str, Any]:
         "rows_reported_by_portal": reported,
         "complete": not truncated,
         "truncated_slices": [
-            {**(r.get("slice") or {}), "rows_collected": len(r.get("rows") or []),
+            {**(r.get("slice") or {}), "rows_collected": _slice_rows(r),
              "rows_reported": r.get("total_reported")}
             for r in truncated
         ],
@@ -425,6 +518,8 @@ COVERAGE_SOURCES = (
                    ("sacramento_solicitations.jsonl",), "_cov_sacramento"),
     CoverageSource("caleprocure_lpa", "lpa_coverage.json",
                    ("lpa_vehicles.json",), "_cov_lpa"),
+    CoverageSource("caleprocure_vendor_ads", "vendor_ads_coverage.json",
+                   ("vendor_ads_declared_interest.jsonl",), "_cov_vendor_ads"),
     CoverageSource("caleprocure_supplier_search", "supplier_locations_coverage.json",
                    ("supplier_locations.json",), "_cov_suppliers"),
     CoverageSource("cslb_license_master", "cslb_coverage.json",
@@ -478,6 +573,18 @@ def _cov_lpa(cov: Any, rows: int) -> dict[str, Any]:
             "note": (f"{cov.get('suppliers_with_vehicles')} of "
                      f"{cov.get('suppliers_checked')} suppliers hold a vehicle"
                      if cov.get("suppliers_checked") else None)}
+
+
+def _cov_vendor_ads(cov: Any, rows: int) -> dict[str, Any]:
+    cov = cov or {}
+    checked = cov.get("events_checked")
+    # Events that said "No Ad for..." are answered, not missing, so they are not a
+    # shortfall. Only the ones whose page could not be read are.
+    return {"collected": rows, "reported": None, "complete": None,
+            "failures": len(cov.get("failures") or []),
+            "note": (f"{cov.get('events_with_ads')} of {checked} events carried an ad; "
+                     f"{len(cov.get('events_stating_no_ads') or [])} stated none"
+                     if checked else None)}
 
 
 def _cov_suppliers(cov: Any, rows: int) -> dict[str, Any]:

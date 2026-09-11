@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import argparse
 import collections
+import functools
 import json
 import pathlib
 import sys
 from typing import Any
 
-from . import assemble, documents, extract, harvest_state, sources
+from . import (assemble, documents, evidence, extract, harvest_state,
+               sources)
 from .assemble import (ENRICHMENTS, _opportunity_intelligence, _participants,
                        _read_jsonl, _source_coverage)
 from .sources.ca import caleprocure as ca
@@ -254,13 +256,15 @@ def cmd_bidders(args: argparse.Namespace) -> int:
                 return []
 
         summary = vendors.resolve_bidder_identities(candidates, lookup)
-        documents.write_jsonl(summary["awards_seen"],
-                              outdir / "awards_bidder_enriched.jsonl")
+        assemble.merge_cache(outdir, "awards_bidder_enriched.jsonl",
+                             summary["awards_seen"], key=assemble.award_key)
         print(f"  resolved {summary['resolved']} rows, {summary['ambiguous']} ambiguous, "
               f"{summary['unresolved']} unresolved; "
               f"{len(summary['awards_seen'])} award rows collected for profiles")
 
-    documents.write_jsonl(candidates, outdir / "caltrans_bidders.jsonl")
+    # The cache accumulates across runs; the results file describes this run only.
+    assemble.merge_cache(outdir, "caltrans_bidders.jsonl", candidates,
+                         key=assemble.bidder_key)
     (outdir / "caltrans_bid_results.json").write_text(
         json.dumps(result, indent=1, default=str))
 
@@ -305,7 +309,8 @@ def cmd_tabulations(args: argparse.Namespace) -> int:
             data, document_ref=url, sha256="", allow_ocr=not args.no_ocr)]
 
     result = sfpw.harvest(worth, read_pages, max_pages=args.max_pages)
-    documents.write_jsonl(result["candidates"], outdir / "sf_bidders.jsonl")
+    assemble.merge_cache(outdir, "sf_bidders.jsonl", result["candidates"],
+                         key=assemble.bidder_key)
     (outdir / "sf_tabulations.json").write_text(
         json.dumps({k: v for k, v in result.items() if k != "candidates"},
                    indent=1, default=str))
@@ -382,12 +387,12 @@ def cmd_backfill_primes(args: argparse.Namespace) -> int:
           f"eligible to prime this opportunity")
 
     session = _session(args)
-    merged = {(r.get("purchase_doc"), r.get("supplier_id")): r for r in awards}
+    merged = {assemble.award_key(r): r for r in awards}
     truncated: list[str] = []
     for n, sid in enumerate(eligible, 1):
         result = scprs.search(session, supplier_id=sid)
         for row in result["rows"]:
-            merged.setdefault((row.get("purchase_doc"), row.get("supplier_id")), row)
+            merged.setdefault(assemble.award_key(row), row)
         if result["truncated"]:
             # The grid caps at 200 rows and cannot be paged, so a deeper vendor is
             # under-represented. Recorded, because silent shortfall is what biases a corpus.
@@ -600,6 +605,43 @@ def cmd_suppliers(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_vendor_ads(args: argparse.Namespace) -> int:
+    """Read the vendor-ad board on each event in the cached feed.
+
+    These are never bidders. A prime seeking a sub says it means to bid *this* event,
+    which is the only forward-looking declared signal Cal eProcure publishes; a sub
+    seeking a prime is offering itself to whoever bids. Both land as declared_interest
+    and there is no path that promotes either to a bidder.
+    """
+    from .sources.ca import vendor_ads
+
+    outdir = pathlib.Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    events = assemble._read_jsonl(outdir / "events.jsonl")
+    if not events:
+        print("  no events.jsonl; run analyze or events first")
+        return 1
+    if args.limit:
+        events = events[:args.limit]
+    print(f"  reading the ad board on {len(events)} events")
+
+    session = _session(args)
+    out = vendor_ads.harvest(
+        functools.partial(vendor_ads.read_ad_page, session), events,
+        on_progress=lambda m: print(f"        {m}"))
+    rows = assemble.merge_cache(outdir, "vendor_ads_declared_interest.jsonl",
+                                out["rows"], key=assemble.declared_interest_key)
+    (outdir / "vendor_ads_coverage.json").write_text(json.dumps(
+        {k: v for k, v in out.items() if k != "rows"}, indent=1, default=str))
+    intending = sum(1 for r in rows if r["intends_to_bid"])
+    print(f"\n{len(rows)} ads across {out['events_with_ads']} events "
+          f"({intending} prime-seeking-sub, i.e. stating an intent to bid; "
+          f"{out['generic_bid_assistance']} generic bid-assistance); "
+          f"{len(out['events_stating_no_ads'])} events stated no ads, "
+          f"{len(out['failures'])} failed")
+    return 0
+
+
 def cmd_lpa(args: argparse.Namespace) -> int:
     """Look up the statewide contract vehicles held by suppliers in the award corpus.
 
@@ -681,8 +723,10 @@ def cmd_planetbids(args: argparse.Namespace) -> int:
             print(f"        WARNING: collected {out['bids_collected']} of "
                   f"{out['bids_reported_by_portal']} solicitations the portal reported")
 
-    documents.write_jsonl(candidates, outdir / "planetbids_bidders.jsonl")
-    documents.write_jsonl(interest, outdir / "planetbids_declared_interest.jsonl")
+    assemble.merge_cache(outdir, "planetbids_bidders.jsonl", candidates,
+                         key=assemble.bidder_key)
+    assemble.merge_cache(outdir, "planetbids_declared_interest.jsonl", interest,
+                         key=assemble.bidder_key)
     (outdir / "planetbids_coverage.json").write_text(
         json.dumps({"agencies": summaries}, indent=1, default=str))
     print(f"\n{len(candidates)} bidder rows | {len(interest)} planholder rows "
@@ -770,40 +814,80 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         # reference window even pinned, so a single axis cannot finish. Both lists are
         # lower bounds, which is why the sweep measures what it recovered.
         axes = []
-        cached = assemble._read_jsonl(outdir / "awards.jsonl")
-        if cached:
-            methods = scprs.observed_acq_methods(cached)
+        # Named distinctly from `cached`, which is the output *path* set above. Reusing
+        # that name here clobbered it and the sweep died writing its own results -- on
+        # the full-sweep branch only, so every --reuse-awards run passed and every real
+        # one lost ninety minutes of throttled requests.
+        previous_awards = assemble._read_jsonl(outdir / "awards.jsonl")
+        if previous_awards:
+            methods = scprs.observed_acq_methods(previous_awards)
             if methods:
                 axes.append(("acq_method", methods))
         units = scprs.observed_business_units(assemble._read_jsonl(outdir / "events.jsonl"))
         if units:
             axes.append(("business_unit", units))
+        # Resume rather than restart. This sweep is the longest transaction in the
+        # pipeline and has lost about ninety minutes twice: once to memory pressure,
+        # once to a crash writing its own output. A slice that answered is not asked
+        # again; a slice that failed stays pending.
+        sweep_state = harvest_state.load(outdir)
+        done = {u for u, e in (sweep_state.get("sources", {})
+                               .get("caleprocure_scprs", {})
+                               .get("units", {})).items()
+                if e.get("outcome") in harvest_state.DONE}
+
+        def note_slice(key: str, outcome: str, rows: int) -> None:
+            harvest_state.record(sweep_state, "caleprocure_scprs", key,
+                                 outcome=outcome, rows=rows)
+
         for result in scprs.search_date_sliced(
-                session, window_from, cutoff, subdivide_by=axes or None):
+                session, window_from, cutoff, subdivide_by=axes or None,
+                skip=done, on_slice=note_slice):
             # A subdivided parent slice is yielded for its shortfall note and carries the
             # same rows its children already yielded. Taking them again double-counts.
             if result.get("subdivided"):
                 continue
-            slices.append(result)
-            awards += result["rows"]
+            # Checkpoint per slice. The save below only runs if the whole sweep
+            # finishes, so a run killed part-way -- the memory kill this resume was
+            # built for -- held nothing and refetched all of it. Rows before state:
+            # a crash between the two costs one refetch, whereas marking a slice
+            # done whose rows never reached disk would leave a hole nothing reports.
+            documents.write_jsonl(result["rows"], cached, append=True)
+            harvest_state.save(outdir, sweep_state)
+            # Keep the slice's tally, drop its rows. They are on disk a line above,
+            # and coverage only ever asks how many there were. Holding them here as
+            # well retained every row twice for the length of the sweep, which is
+            # what killed this run three times; twelve months would not have fit at
+            # all. Peak memory is now one slice, not the whole window.
+            slices.append({k: v for k, v in result.items() if k != "rows"}
+                          | {"rows_collected": len(result["rows"])})
+        harvest_state.save(outdir, sweep_state)
+        if done:
+            print(f"        resumed: {len(done)} slice(s) already held, "
+                  f"{len(previous_awards)} cached rows carried")
         coverage = assemble.award_sweep_coverage(slices)
-        (outdir / "awards_coverage.json").write_text(
-            json.dumps({**coverage, "window": {"from": window_from, "to": cutoff}},
-                       indent=1, default=str))
+        coverage_path = outdir / "awards_coverage.json"
+        existing_coverage = (json.loads(coverage_path.read_text())
+                             if coverage_path.exists() else None)
         if not coverage["complete"]:
             print(f"        WARNING: {coverage['slices_truncated']} of "
                   f"{coverage['slices']} slices hit the grid cap; "
                   f"{coverage['rows_reported_by_portal'] - coverage['rows_collected']} "
                   f"reported rows not retrieved (see awards_coverage.json)")
-        seen: set[tuple[Any, Any]] = set()
-        deduped = []
-        for row in awards:
-            key = (row.get("purchase_doc"), row.get("supplier_id"))
-            if key not in seen:
-                seen.add(key)
-                deduped.append(row)
-        awards = deduped
+        # Read back what the sweep checkpointed instead of carrying it in memory: the
+        # file already holds this run's slices appended to whatever an earlier run left,
+        # so this is both the dedupe and the resume carry-over in one pass. Last wins,
+        # so a row fetched now replaces the cached copy of the same award.
+        # ponytail: reads the whole corpus once at the end. If the window ever outgrows
+        # memory at that point, stream it through a temp file keyed on award_key.
+        awards = list({assemble.award_key(r): r
+                       for r in assemble._read_jsonl(cached)}.values())
         documents.write_jsonl(awards, cached)
+        # Written after the rows, and always -- a verdict is only worth publishing next
+        # to the corpus it describes.
+        coverage_path.write_text(json.dumps(assemble.award_coverage_verdict(
+            coverage, existing_coverage, rows_on_disk=len(awards), held=len(done),
+            window={"from": window_from, "to": cutoff}), indent=1, default=str))
         print(f"        {len(awards)} award rows")
 
     # 5. Lineage -- always emits a trace, including an explicit no-match.
@@ -859,6 +943,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         build_method=prime_build)
     (outdir / "prime_candidates.json").write_text(json.dumps(prime, indent=1, default=str))
 
+    # Planholders and vendor ads: interest, never bids. Read from every surface that
+    # publishes it so a new one reaches the export by being harvested, not by editing
+    # this line.
+    declared = [row for cache in assemble.DECLARED_INTEREST_CACHES
+                for row in assemble._read_jsonl(outdir / cache)]
+
     intelligence = _opportunity_intelligence(
         opportunity, known=known, prediction=prediction,
         lineage_result=lineage_result, documents_manifest=manifest)
@@ -898,15 +988,37 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     print("  [9/9] supabase fixtures and report")
     tables = {
         "gov_procurement_sources": se.source_rows(),
-        "gov_procurement_records": (se.event_record_rows(events, target=opportunity, participants=known)
+        "gov_procurement_records": (se.event_record_rows(events, target=opportunity,
+                                                         participants=known + declared,
+                                                         documents=manifest)
                                     + se.award_record_rows(awards)),
-        "gov_procurement_participants": se.participant_rows(known, awards),
+        # Four participation states, not two. Planholders and advertisers were being
+        # collected and never exported -- 25,090 rows of the strongest pre-close signal
+        # the portals publish, sitting on disk while the export claimed to distinguish
+        # interested vendors from bidders.
+        "gov_procurement_participants": (se.participant_rows(known, awards)
+                                         + se.declared_interest_rows(declared)),
         "gov_procurement_documents": se.document_rows(manifest),
         "document_content_handoff": se.handoff_rows(pages),
-        "gov_competitors": se.competitor_rows(profiles),
+        # Two sources, and both are needed. Award history covers vendors that have won
+        # something; the observed side covers everyone we watched bid without matching
+        # them to a state supplier id. Emitting only the first left 2,703 participants
+        # pointing at 1,786 competitor records that did not exist.
+        "gov_competitors": (se.competitor_rows(profiles)
+                            + se.observed_competitor_rows(known + declared)),
         "partner_match_payloads": se.partner_match_rows([prime]),
     }
     validation = se.write_exports(tables, outdir / "supabase")
+    # Does a reviewer following a citation arrive anywhere? Schema validation cannot
+    # answer that, and a dangling reference is invisible in the row that carries it.
+    audit = evidence.audit(tables)
+    (outdir / "evidence_audit.json").write_text(
+        json.dumps(audit, indent=1, default=str))
+    if not audit["sound"]:
+        print(f"        WARNING: {audit['defect_count']} evidence defect(s) — "
+              f"{audit['dangling_references']} dangling, "
+              f"{audit['page_citations_out_of_range']} page citations out of range "
+              f"(see evidence_audit.json)")
     report_mod.BUILD = outdir
     report_mod.write(outdir / "report.md")
 
@@ -930,7 +1042,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if missing:
         print(f"\nincomplete: {missing}", file=sys.stderr)
         return 1
-    print(f"\nknown bidders {len(known)} | likely bidders "
+    print(f"\nknown bidders {intelligence['known_bidders']['count']} | likely bidders "
           f"{len(prediction['predictions'])} | primes {prime['candidates_qualified']} | "
           f"lineage {lineage_result['trace']['result']} | review items {len(review)}")
     return 0
@@ -986,6 +1098,12 @@ def build_parser() -> argparse.ArgumentParser:
     bp = sub.add_parser("backfill-primes", parents=[common],
                         help="deepen award history for the prime-eligible vendor set")
     bp.add_argument("--opportunity", required=True)
+
+    va = sub.add_parser("vendor-ads", parents=[common],
+                        help="harvest Cal eProcure vendor ads (declared interest, "
+                             "never bidders)")
+    va.add_argument("--limit", type=int, default=0,
+                    help="most events to read; 0 reads every event in the cached feed")
 
     bd = sub.add_parser("bidders", parents=[common],
                         help="harvest Caltrans weekly bid results (names losing bidders)")
@@ -1064,6 +1182,7 @@ def main(argv: list[str] | None = None) -> int:
             "tabulations": cmd_tabulations, "auth": cmd_auth, "limits": cmd_limits,
             "planetbids": cmd_planetbids,
             "lpa": cmd_lpa, "suppliers": cmd_suppliers, "cslb": cmd_cslb, "csu": cmd_csu, "sacramento": cmd_sacramento,
+            "vendor-ads": cmd_vendor_ads,
             "coverage": cmd_coverage}[
         args.command](args)
 

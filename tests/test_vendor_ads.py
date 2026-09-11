@@ -213,5 +213,79 @@ class LicenceTests(unittest.TestCase):
         self.assertEqual(row["cslb_licences"], ["1155122"])
 
 
+class _RecordingSession:
+    """Stands in for CalEProcureSession, recording the order of calls."""
+
+    def __init__(self, page: str = GENUINE) -> None:
+        self.page = page
+        self.calls: list[str] = []
+
+    def bootstrap(self) -> None:
+        self.calls.append("bootstrap")
+
+    def get(self, url, referer=None, timeout=120):
+        self.calls.append(f"get {url.split('?')[0].rsplit('/', 1)[-1]}")
+        return b"<html></html>", {}
+
+    def absorb_state(self, body) -> None:
+        self.calls.append("absorb")
+
+    def post_action(self, action, referer, timeout=120, url=None, extra=None):
+        self.calls.append(f"post {action}")
+        return self.page.encode(), {}
+
+
+class ReadAdPageTests(unittest.TestCase):
+    """The postback is ordered, and getting the order wrong fails silently."""
+
+    def test_the_detail_page_is_fetched_before_the_ad_postback(self) -> None:
+        # PeopleSoft validates ICStateNum against the page currently rendered. Posting
+        # without the detail GET returns a session page, which parses as "no ads" --
+        # a failure wearing the stated-absence answer this module exists to separate.
+        session = _RecordingSession()
+        va.read_ad_page(session, "7760", "0000039865")
+        posted = session.calls.index(f"post {va.ACTION}")
+        self.assertTrue(any(c.startswith("get ") for c in session.calls[:posted]),
+                        f"posted before establishing the page: {session.calls}")
+
+    def test_it_returns_the_ad_page_the_postback_answered_with(self) -> None:
+        parsed = va.parse_ad_page(va.read_ad_page(_RecordingSession(), "7760", "0000039865"))
+        self.assertEqual(parsed["ad_count"], 1)
+
+
+class CitationTests(unittest.TestCase):
+    """A citation has to name the record, not the portal."""
+
+    def test_the_evidence_url_names_the_event_the_ad_was_posted_against(self) -> None:
+        # All 106 live rows cited the same bare component URL, so following one landed
+        # on Cal eProcure rather than on the solicitation.
+        row = va.declared_interest_rows(va.parse_ad_page(GENUINE))[0]
+        self.assertIn("AUC_ID=0000039865", row["evidence_url"])
+        self.assertIn("BUSINESS_UNIT=7760", row["evidence_url"])
+
+    def test_two_events_do_not_share_one_citation(self) -> None:
+        a = va.declared_interest_rows(va.parse_ad_page(GENUINE))[0]
+        b = va.declared_interest_rows(va.parse_ad_page(PRIME))[0]
+        self.assertNotEqual(a["evidence_url"], b["evidence_url"])
+
+
+class HarvestOutcomeTests(unittest.TestCase):
+    def test_an_event_whose_page_cannot_be_read_is_recorded_not_dropped(self) -> None:
+        def boom(bu, eid):
+            raise RuntimeError("timed out")
+
+        out = va.harvest(boom, [{"business_unit": "7760", "event_id": "0000039865"}])
+        self.assertEqual(out["events_checked"], 0)
+        self.assertEqual(len(out["failures"]), 1)
+        # A failure must never land in the same bucket as a page that said "no ads".
+        self.assertEqual(out["events_stating_no_ads"], [])
+
+    def test_an_event_stating_no_ads_is_answered_not_failed(self) -> None:
+        out = va.harvest(lambda bu, eid: "<html>nothing here</html>",
+                         [{"business_unit": "7760", "event_id": "0000039865"}])
+        self.assertEqual(out["failures"], [])
+        self.assertEqual(len(out["events_stating_no_ads"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

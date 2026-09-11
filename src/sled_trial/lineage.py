@@ -237,11 +237,13 @@ def find_predecessors(
         "queries": queries,
         "surfaces_not_available": [
             {"surface": "caleprocure_response_bid_inquiry",
-             "reason": "requires login; not attempted per SECURITY.md"},
+             "reason": "exposes no respondent fields, anonymously or with a supplier "
+                       "login (tested 2026-09-10); nothing there to search"},
             {"surface": "dgs_historical_contracts",
              "reason": "bulk export discontinued in 2018; pre-2015 data by manual request only"},
             {"surface": "data_ca_gov_purchase_orders",
-             "reason": "robots.txt disallows the datastore API; unresolved with the trial author"},
+             "reason": "CSV route is permitted but the extract ends FY2014-15 and is not "
+                       "loaded; the datastore API stays off per robots.txt"},
         ],
         "result": "predecessors_found" if predecessors else "no_predecessor_found",
         "no_match_meaning": (

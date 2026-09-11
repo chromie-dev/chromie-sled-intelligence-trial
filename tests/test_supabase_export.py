@@ -323,6 +323,67 @@ class ParticipantRecordIntegrityTests(unittest.TestCase):
                 row = se.participant_rows([candidate], [])[0]
                 self.assertIn(row["record_id"], ids)
 
+    def test_a_planholder_and_an_advertiser_are_different_states(self) -> None:
+        # The brief asks the system to distinguish interested vendors, planholders,
+        # respondents, bidders, awardees and incumbents. Collapsing the first two into
+        # "interested" is the inflation those six states exist to prevent: a planholder
+        # took the package from the agency, an advertiser posted about itself.
+        rows = se.declared_interest_rows([
+            {"business_unit": "PB14424", "event_id": "122502",
+             "vendor_name_raw": "1st California Construction, Inc.", "vendor_id": 217539,
+             "source_key": "planetbids_agency_portal", "pre_bid_meeting_attendee": True},
+            {"business_unit": "7760", "event_id": "0000039865",
+             "vendor_name_raw": "Integrity Technology", "intends_to_bid": False,
+             "interest_direction": "sub_seeking_prime",
+             "source_key": "caleprocure_vendor_ads"}])
+        self.assertEqual([r["role"] for r in rows], ["planholder", "interested_vendor"])
+
+    def test_declared_interest_never_becomes_a_bidder(self) -> None:
+        rows = se.declared_interest_rows([
+            {"business_unit": "PB14424", "event_id": "122502",
+             "vendor_name_raw": "ACME", "source_key": "planetbids_agency_portal"}])
+        self.assertNotIn(rows[0]["role"], ("known_bidder", "awardee"))
+        self.assertIsNone(rows[0]["submitted_amount"])
+        self.assertIsNone(rows[0]["rank"])
+        self.assertEqual(rows[0]["identity_confidence"], "unresolved")
+
+    def test_an_unmapped_surface_is_skipped_rather_than_given_a_role(self) -> None:
+        # Defaulting an unknown surface into a role is how a weak signal quietly
+        # acquires a strong name.
+        self.assertEqual(se.declared_interest_rows(
+            [{"business_unit": "X", "event_id": "1", "vendor_name_raw": "ACME",
+              "source_key": "some_new_portal"}]), [])
+
+    def test_a_planholder_resolves_to_a_competitor_and_a_record(self) -> None:
+        # Exporting the participation without the rows it points at is how 2,703
+        # dangling competitor references happened the first time.
+        declared = [{"business_unit": "PB14424", "event_id": "122502",
+                     "vendor_name_raw": "ACME", "vendor_id": 1,
+                     "source_key": "planetbids_agency_portal"}]
+        part = se.declared_interest_rows(declared)[0]
+        self.assertIn(part["competitor_id"],
+                      {c["id"] for c in se.observed_competitor_rows(declared)})
+        self.assertIn(part["record_id"],
+                      {r["id"] for r in se.event_record_rows([], participants=declared)})
+
+    def test_a_document_whose_event_left_the_feed_still_has_a_record(self) -> None:
+        # The document corpus accumulates across runs; the feed lists only what is open
+        # today. An event that closes between two runs leaves its already-downloaded
+        # documents parentless -- 34 of them in the first real corpus the audit ran on.
+        closed = {"business_unit": "3600", "event_id": "0000040132",
+                  "displayed_filename": "RFQ-2026-IDR6-002.docx"}
+        records = se.event_record_rows([], target=None, documents=[closed])
+        doc = se.document_rows([closed])[0]
+        self.assertIn(doc["record_id"], {r["id"] for r in records},
+                      "the document we retrieved points at a solicitation nothing emits")
+
+    def test_a_document_on_a_still_listed_event_adds_no_second_record(self) -> None:
+        feed = [{"business_unit": "3600", "event_id": "0000040132"}]
+        records = se.event_record_rows(
+            feed, target=None,
+            documents=[{"business_unit": "3600", "event_id": "0000040132"}])
+        self.assertEqual(len(records), 1)
+
     def test_a_city_solicitation_is_recorded_under_its_own_source(self) -> None:
         records = se.event_record_rows([], target=None, participants=[self.SF])
         self.assertEqual(records[0]["source_key"], "sfpublicworks_bid_tabulation")
@@ -400,6 +461,98 @@ class DerivedRankAndPlatformIdTests(unittest.TestCase):
     def test_a_source_without_a_platform_id_carries_none(self) -> None:
         row = se.participant_rows([self.STATED], [])[0]
         self.assertIsNone(row["evidence"]["platform_vendor_id"])
+
+class ObservedCompetitorTests(unittest.TestCase):
+    """A company we watched bid is a competitor, even without a state supplier id.
+
+    `competitor_rows` was built from award history only, so every observed bidder that
+    could not be matched to SCPRS got a competitor id minted for it by `participant_rows`
+    and nothing emitted the row. Measured on a real export: 2,703 participant rows
+    pointing at 1,786 competitor records that did not exist. The companies were in the
+    data and unreachable from it.
+    """
+
+    OBSERVED = [
+        {"vendor_name_raw": "SS+K Construction Inc.", "business_unit": "PB14424",
+         "event_id": "122502", "source_key": "planetbids_agency_portal",
+         "vendor_id": 1057345, "classifications": ["WBE", "OSB"]},
+        {"vendor_name_raw": "SS+K Construction Inc.", "business_unit": "PB14424",
+         "event_id": "122503", "source_key": "planetbids_agency_portal",
+         "vendor_id": 1057345, "classifications": ["WBE", "OSB"]},
+        {"vendor_name_raw": "Ware Disposal Inc.", "business_unit": "2660",
+         "event_id": "08A3933", "source_key": "caltrans_bid_results"},
+        {"vendor_name_raw": "RESOLVED CO", "supplier_id": "0000005196",
+         "source_key": "caltrans_bid_results"},
+    ]
+
+    def _rows(self):
+        return se.observed_competitor_rows(self.OBSERVED)
+
+    def test_one_row_per_distinct_vendor_not_per_observation(self) -> None:
+        rows = self._rows()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({r["legal_name"] for r in rows},
+                         {"SS+K Construction Inc.", "Ware Disposal Inc."})
+
+    def test_a_vendor_already_resolved_to_a_supplier_id_is_not_duplicated(self) -> None:
+        # It already has a competitor row from the award-history side.
+        self.assertNotIn("RESOLVED CO", {r["legal_name"] for r in self._rows()})
+
+    def test_the_id_matches_what_the_participant_row_references(self) -> None:
+        # This is the whole fix: the ids have to agree, or the reference still dangles.
+        participant = se.participant_rows([self.OBSERVED[0]], [])[0]
+        emitted = {r["id"] for r in self._rows()}
+        self.assertIn(participant["competitor_id"], emitted)
+
+    def test_an_observed_competitor_is_an_unresolved_stub(self) -> None:
+        # Observed is not profiled, and saying otherwise would imply award history we
+        # do not have.
+        row = next(r for r in self._rows() if r["legal_name"] == "Ware Disposal Inc.")
+        self.assertEqual(row["profile_status"], "stub")
+        self.assertEqual(row["identity_confidence"], "unresolved")
+        self.assertIsNone(row["external_source_id"])
+
+    def test_a_platform_id_is_carried_but_never_as_a_state_supplier_id(self) -> None:
+        row = next(r for r in self._rows() if r["legal_name"].startswith("SS+K"))
+        self.assertEqual(row["public_identifiers"],
+                         {"planetbids_agency_portal_vendor_id": 1057345})
+        self.assertNotIn("scprs_supplier_id", row["public_identifiers"])
+
+    def test_certifications_observed_on_the_bid_are_kept(self) -> None:
+        row = next(r for r in self._rows() if r["legal_name"].startswith("SS+K"))
+        self.assertEqual(sorted(row["certifications"]), ["OSB", "WBE"])
+
+    def test_the_export_has_no_dangling_competitor_references(self) -> None:
+        """The end state, asserted end to end.
+
+        Both competitor sources are needed: award history covers resolved vendors,
+        this covers observed ones. Either alone leaves references dangling, which is
+        how the defect survived -- only the first was emitted.
+        """
+        from sled_trial import evidence
+
+        participants = se.participant_rows(self.OBSERVED, [])
+        competitors = self._rows() + se.competitor_rows([
+            {"supplier_id": "0000005196", "canonical_name": "RESOLVED CO"}])
+        report = evidence.audit({
+            "gov_procurement_records": [{"id": p["record_id"]} for p in participants],
+            "gov_competitors": competitors,
+            "gov_procurement_participants": participants,
+        })
+        self.assertEqual(report["dangling_references"], 0)
+
+    def test_observed_rows_alone_are_not_enough(self) -> None:
+        # Stated explicitly so nobody removes the award-history source thinking this
+        # one supersedes it.
+        from sled_trial import evidence
+
+        participants = se.participant_rows(self.OBSERVED, [])
+        report = evidence.audit({
+            "gov_procurement_records": [{"id": p["record_id"]} for p in participants],
+            "gov_competitors": self._rows(),
+            "gov_procurement_participants": participants,
+        })
+        self.assertEqual(report["dangling_references"], 1)
 
 
 if __name__ == "__main__":

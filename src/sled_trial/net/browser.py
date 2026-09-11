@@ -20,8 +20,6 @@ from typing import Any
 
 from . import UA, TransientFetchError
 
-BROWSERBASE_API = "https://api.browserbase.com/v1"
-
 
 @dataclass
 class BrowserFetcher:

@@ -14,7 +14,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...net import UA, TransientFetchError  # noqa: F401  (re-exported for adapters)
+from ...net import TransientFetchError  # noqa: F401  (re-exported; callers catch ca.TransientFetchError)
 from ...net.http import HttpFetcher
 
 HOST = "https://caleprocure.ca.gov"

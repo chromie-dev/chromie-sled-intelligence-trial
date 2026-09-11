@@ -99,9 +99,6 @@ cost a day to find and is the single most useful thing in this document.
 - Verified: 2026-09-09
 - **Gaps and caveats:** Discovery is the weak point: the calendar links mostly minutes and agendas, so a full backfill needs meeting-page URLs supplied. Bidders are listed in the order opened, NOT by price, so rank is derived from amount. A tabulation precedes responsibility review, so the low bidder is not yet the awardee. SF vendors carry no state supplier_id, so identity cannot resolve against SCPRS
 
-
-## Verified, not yet wired in
-
 ### Supplier search (ZZ_PO.ZZ_PUBSRCH)
 
 - Browser page: https://caleprocure.ca.gov/pages/PublicSearch/supplier-search.aspx
@@ -113,6 +110,7 @@ cost a day to find and is the single most useful thing in this document.
 - History available: current state only
 - Stable identifiers: supplier name; certification id (no supplier_id observed in results)
 - Verified: 2026-09-09
+- Wired in: `suppliers` command -> `supplier_locations.json` -> `vendors.attach_location`
 - **Gaps and caveats:** ANSWERS THE GEOGRAPHY GAP - city, postal code and street address per supplier. Component is titled 'Custom Component for SB orDVBE' so coverage may be limited to certification-registered suppliers rather than all state suppliers; must be measured. No supplier_id in results, so the join to SCPRS is by name and inherits that weakness.
 
 ### Leveraged Procurement Agreement search (ZZ_PO.ZZ_CNT_SRC_CMP_BKP)
@@ -126,7 +124,11 @@ cost a day to find and is the single most useful thing in this document.
 - History available: active vehicles with expiry dates
 - Stable identifiers: CNTRCT_ID (matches SCPRS lpa_contract); VENDOR_ID1 (matches SCPRS supplier_id)
 - Verified: 2026-09-09
+- Wired in: `lpa` command -> `lpa_vehicles.json` -> `vendors.attach_vehicles`, which feeds the `vehicle_presence` prediction feature
 - **Gaps and caveats:** POPULATES THE 'presence on a statewide contract or purchasing vehicle' PREDICTION FEATURE, which predict.py scores but has always evaluated to zero. Joins on identifier rather than name - the only surface besides SCPRS where that is true.
+
+
+## Verified, not yet harvested
 
 ### Event vendor ads (Prime Seeking Sub / Sub Seeking Prime)
 
@@ -153,7 +155,7 @@ cost a day to find and is the single most useful thing in this document.
 - **Gaps and caveats:** distinguishes holding a contract from being actively paid under it - real incumbency corroboration. Field extraction still to map
 
 
-## Blocked or unresolved
+## Tested negatives and unreachable hosts
 
 ### Response Bid Inquiry (respondent fields)
 

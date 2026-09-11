@@ -211,11 +211,15 @@ def process_event_documents(
     return manifest, pages
 
 
-def write_jsonl(rows: Iterable[dict[str, Any]], path: str | pathlib.Path) -> int:
+def write_jsonl(rows: Iterable[dict[str, Any]], path: str | pathlib.Path,
+                *, append: bool = False) -> int:
+    """Write rows as JSONL. `append` is for a long sweep checkpointing as it goes:
+    the caller rewrites the file deduped at the end, so a torn run leaves duplicates
+    rather than a hole."""
     path = pathlib.Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
-    with path.open("w", encoding="utf-8") as handle:
+    with path.open("a" if append else "w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
             count += 1

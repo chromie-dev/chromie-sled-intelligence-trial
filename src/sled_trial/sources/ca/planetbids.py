@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import datetime as dt
 import urllib.parse
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterable
 
 API = "https://api-external.prod.planetbids.com/papi"
 PORTAL = "https://pbsystem.planetbids.com/portal/{cid}/bo/bo-search"

@@ -19,6 +19,17 @@ class GenerateTests(unittest.TestCase):
         self.assertIn("Trial Report", text)
         self.assertIn("Next three sources", text)
 
+    def test_the_landscape_reflects_the_sources_actually_wired_in(self) -> None:
+        # The bid-inquiry surface was tested with a login and exposes no respondents; the
+        # browser-only PlanetBids portals are the largest bidder source. Prose written
+        # before either finding must not survive in a generated report.
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(report, "BUILD", pathlib.Path(tmp)):
+                text = report.generate()
+        self.assertIn("PlanetBids", text)
+        self.assertNotIn("out of bounds", text)
+        self.assertNotIn("no browser, no API key", text)
+
     def test_non_competing_entities_are_excluded_from_the_landscape_table(self) -> None:
         # Listing a county among "most active suppliers" would contradict the rule that
         # excludes it from competitor ranking.
@@ -68,6 +79,35 @@ class GenerateTests(unittest.TestCase):
                 path = report.write(pathlib.Path(tmp) / "report.md")
             self.assertTrue(pathlib.Path(path).exists())
 
+
+
+class GeneratedProseTests(unittest.TestCase):
+    """Prose in a generated report must come from the run, not from a past one.
+
+    Two lift figures were hardcoded into the caveat paragraph and outlived the corpus
+    that produced them, so the report quoted 0.92x next to a table saying 1.333x.
+    """
+
+    def _report(self, precision, baseline):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            (out / "evaluation.json").write_text(json.dumps({
+                "precision_at_3": precision, "precision_at_5": 0.05, "coverage": 0.1,
+                "baseline_comparison": {
+                    "best_baseline_precision_at_3": baseline,
+                    "lift_over_best_baseline": precision / baseline}}))
+            with mock.patch.object(report, "BUILD", out):
+                return report.generate()
+
+    def test_the_caveat_states_the_gap_this_run_measured(self) -> None:
+        text = self._report(0.0625, 0.0469)
+        self.assertIn("0.0156", text)
+
+    def test_no_lift_figure_from_an_earlier_run_survives(self) -> None:
+        text = self._report(0.0625, 0.0469)
+        for stale in ("0.92x", "1.20x", "seven-day", "six-day"):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, text)
 
 if __name__ == "__main__":
     unittest.main()

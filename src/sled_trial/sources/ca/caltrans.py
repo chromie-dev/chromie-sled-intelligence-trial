@@ -30,7 +30,6 @@ from .caleprocure import CalEProcureSession, _text
 from .scprs import amount_to_numeric
 
 WEEK_URL = "https://dot.ca.gov/programs/procurement-and-contracts/bid-results/bid-week-{date}"
-INDEX_URL = "https://dot.ca.gov/programs/procurement-and-contracts/bid-results"
 # Caltrans is business unit 2660 in Cal eProcure and FI$Cal.
 BUSINESS_UNIT = "2660"
 

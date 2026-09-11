@@ -123,9 +123,6 @@ class GridAnchorTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["supplier_name"], "ULINE INC")
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class SubdivisionCoverageTests(unittest.TestCase):
     """A capped slice must report how much it recovered, not assume it got everything.
@@ -262,3 +259,85 @@ class BusinessUnitAxisTests(unittest.TestCase):
         events = [{"business_unit": "2660"}, {"business_unit": "7760"},
                   {"business_unit": "2660"}, {"business_unit": ""}, {}]
         self.assertEqual(scprs.observed_business_units(events), ["2660", "7760"])
+
+class ResumableSweepTests(unittest.TestCase):
+    """The award sweep is the last long transaction with no resume.
+
+    It has cost two runs today: one killed for memory, one by an edit mid-flight, each
+    losing about ninety minutes of throttled requests. Caltrans already resumes; this is
+    the same treatment for the place still carrying the risk.
+
+    A slice is keyed by what was actually asked -- the date range plus any pinned
+    criteria -- and deliberately not by bisection depth, which is an artefact of how the
+    range was reached rather than part of the question.
+    """
+
+    def _plan(self, plan):
+        def search(session, **criteria):
+            key = (criteria.get("from_date"), criteria.get("acq_method"))
+            rows, total = plan[key]
+            return {"criteria": dict(criteria), "rows": [{"n": i} for i in range(rows)],
+                    "pager": (1, rows, total), "total_reported": total,
+                    "truncated": total > rows, "no_results": False}
+        return search
+
+    def _run(self, plan, **kwargs):
+        original = scprs.search
+        scprs.search = self._plan(plan)
+        try:
+            return list(scprs.search_date_sliced(
+                None, "09/02/2026", "09/02/2026", **kwargs))
+        finally:
+            scprs.search = original
+
+    def test_a_slice_key_ignores_bisection_depth(self) -> None:
+        # The same range reached by a different path is the same question.
+        a = scprs.slice_key({"from": "09/02/2026", "to": "09/02/2026", "depth": 3})
+        b = scprs.slice_key({"from": "09/02/2026", "to": "09/02/2026", "depth": 5})
+        self.assertEqual(a, b)
+
+    def test_a_slice_key_distinguishes_pinned_criteria(self) -> None:
+        base = {"from": "09/02/2026", "to": "09/02/2026", "depth": 0}
+        self.assertNotEqual(scprs.slice_key(base),
+                            scprs.slice_key({**base, "acq_method": "FAIR"}))
+
+    def test_a_slice_already_held_is_not_refetched(self) -> None:
+        plan = {("09/02/2026", None): (12, 12)}
+        key = scprs.slice_key({"from": "09/02/2026", "to": "09/02/2026"})
+        out = self._run(plan, skip={key})
+        self.assertEqual(out, [])
+
+    def test_progress_is_reported_per_slice_as_it_happens(self) -> None:
+        # Recording only at the end is why two killed runs recorded nothing.
+        seen = []
+        self._run({("09/02/2026", None): (12, 12)},
+                  on_slice=lambda key, outcome, rows: seen.append((outcome, rows)))
+        self.assertEqual(seen, [("ok", 12)])
+
+    def test_a_slice_that_returns_nothing_is_recorded_as_empty_not_failed(self) -> None:
+        seen = []
+        self._run({("09/02/2026", None): (0, 0)},
+                  on_slice=lambda key, outcome, rows: seen.append(outcome))
+        self.assertEqual(seen, ["empty"])
+
+    def test_a_slice_that_raises_is_recorded_as_failed_and_does_not_stop_the_sweep(self) -> None:
+        # A failed slice must stay pending; losing the rest of the sweep with it is
+        # what makes a long harvest fragile.
+        def search(session, **criteria):
+            raise OSError("connection reset")
+
+        original = scprs.search
+        scprs.search = search
+        seen = []
+        try:
+            out = list(scprs.search_date_sliced(
+                None, "09/02/2026", "09/02/2026",
+                on_slice=lambda key, outcome, rows: seen.append(outcome)))
+        finally:
+            scprs.search = original
+        self.assertEqual(seen, ["failed"])
+        self.assertEqual(out, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

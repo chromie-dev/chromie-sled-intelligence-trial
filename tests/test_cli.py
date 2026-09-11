@@ -437,6 +437,494 @@ class BidderSourceRegistryTests(unittest.TestCase):
         self.assertEqual(sf.record_source, "sfpublicworks_bid_tabulation")
         self.assertEqual(caltrans.record_source, "caleprocure_event_list")
 
+class CoverageVerdictTests(unittest.TestCase):
+    """A coverage verdict must never describe a corpus that is not on disk."""
+
+    WINDOW = {"from": "08/27/2026", "to": "09/03/2026"}
+
+    def test_a_fresh_measurement_is_published_as_its_own(self) -> None:
+        v = assemble.award_coverage_verdict(
+            {"slices": 559, "rows_collected": 4769, "complete": False, "note": "capped"},
+            None, rows_on_disk=4769, held=0, window=self.WINDOW)
+        self.assertTrue(v["measured_this_run"])
+        self.assertEqual(v["rows_on_disk"], 4769)
+
+    def test_a_fully_resumed_run_carries_the_earlier_verdict_and_says_so(self) -> None:
+        # Found live: the file claimed 4,769 collected while awards.jsonl held 4,288,
+        # because the sweep that measured 4,769 died before writing its rows.
+        earlier = {"slices": 559, "rows_collected": 4769,
+                   "rows_reported_by_portal": 4924, "complete": False, "note": "capped"}
+        v = assemble.award_coverage_verdict(
+            {"slices": 0, "rows_collected": 0, "complete": True, "note": ""},
+            earlier, rows_on_disk=4288, held=17, window=self.WINDOW)
+        self.assertEqual(v["rows_collected"], 4769, "threw away the real measurement")
+        self.assertEqual(v["rows_on_disk"], 4288)
+        self.assertFalse(v["measured_this_run"])
+        self.assertIn("predates", v["note"])
+        self.assertFalse(v["complete"], "a resumed run must not report the window clean")
+
+    def test_a_resumed_run_that_did_measure_keeps_its_own_numbers(self) -> None:
+        v = assemble.award_coverage_verdict(
+            {"slices": 12, "rows_collected": 300, "complete": True, "note": ""},
+            {"slices": 559, "rows_collected": 4769, "complete": False, "note": "old"},
+            rows_on_disk=4588, held=17, window=self.WINDOW)
+        self.assertEqual(v["rows_collected"], 300)
+        self.assertEqual(v["slices_held_from_earlier_runs"], 17)
+        self.assertIn("not re-measured", v["note"])
+
+    def test_a_first_run_with_no_earlier_file_still_publishes(self) -> None:
+        v = assemble.award_coverage_verdict(
+            {"slices": 0, "rows_collected": 0, "complete": True, "note": ""},
+            None, rows_on_disk=0, held=0, window=self.WINDOW)
+        self.assertEqual(v["rows_on_disk"], 0)
+        self.assertEqual(v["window"], self.WINDOW)
+
+
+class SweepMemoryTests(unittest.TestCase):
+    """The sweep must not hold the corpus in memory while it collects it.
+
+    Every row used to be retained twice -- once in `awards`, once inside the slice
+    record kept for coverage, which only ever needed the count. That is what killed
+    three real runs; a twelve-month window would not have fit at all.
+    """
+
+    def _award(self, n):
+        return {"purchase_doc": f"D{n}", "supplier_id": f"V{n}",
+                "supplier_name": f"VENDOR {n}", "department": "Department of Motor Vehicles",
+                "category": "IT Goods", "start_date": "09/01/2026",
+                "awarded_amt": "$100.00", "acq_method": "Fair and Reasonable - COMPETITIVE"}
+
+    def _run(self, tmp, sweep, seen):
+        import argparse
+        from unittest import mock
+
+        from sled_trial import assemble as _a, report
+        from sled_trial.sources.ca import scprs
+
+        out = pathlib.Path(tmp)
+        opp = {"business_unit": "2740", "event_id": "0000040075",
+               "department": "Department of Motor Vehicles", "category": "IT Goods",
+               "amount": 1000.0, "analysis_cutoff": "09/03/2026"}
+        (out / "opportunity.json").write_text(json.dumps(opp))
+        real_coverage = _a.award_sweep_coverage
+
+        def spy(results):
+            seen.extend(results)
+            return real_coverage(results)
+
+        previous_build = report.BUILD
+        try:
+            with mock.patch.object(cli, "_session", lambda args: _NeverFetch()), \
+                    mock.patch.object(cli.ca, "fetch_event_list", lambda session: ""), \
+                    mock.patch.object(scprs, "search_date_sliced", sweep), \
+                    mock.patch.object(cli.assemble, "award_sweep_coverage", spy):
+                return cli.cmd_analyze(argparse.Namespace(
+                    opportunity=str(out / "opportunity.json"), output=tmp,
+                    download_documents=False, raw_root=str(out / "raw"), no_ocr=True,
+                    delay=0, browser_headers=False, awards_from=None,
+                    reuse_awards=False, review_pages=20))
+        finally:
+            report.BUILD = previous_build
+
+    def test_a_slice_record_keeps_its_tally_and_drops_its_rows(self) -> None:
+        def sweep(session, window_from, cutoff, *, subdivide_by=None, skip=(),
+                  on_slice=None):
+            on_slice("s1", "ok", 2)
+            yield {"rows": [self._award(0), self._award(1)], "total_reported": 2,
+                   "truncated": False, "slice": {"from": "09/01/2026"}}
+
+        seen = []
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self._run(tmp, sweep, seen), 0)
+        self.assertNotIn("rows", seen[0], "the slice record still carries its rows")
+        self.assertEqual(seen[0]["rows_collected"], 2)
+
+    def test_every_slice_reaches_the_cache_exactly_once(self) -> None:
+        # Rows are appended per slice and deduped by reading the file back, so a row
+        # repeated across slices must not appear twice on disk.
+        def sweep(session, window_from, cutoff, *, subdivide_by=None, skip=(),
+                  on_slice=None):
+            for i, rows in enumerate([[self._award(0), self._award(1)],
+                                      [self._award(1), self._award(2)]]):
+                on_slice(f"s{i}", "ok", len(rows))
+                yield {"rows": rows, "total_reported": len(rows), "truncated": False,
+                       "slice": {"from": "09/01/2026"}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self._run(tmp, sweep, []), 0)
+            rows = [json.loads(l) for l in
+                    (pathlib.Path(tmp) / "awards.jsonl").read_text().splitlines()
+                    if l.strip()]
+        self.assertEqual(sorted(r["purchase_doc"] for r in rows), ["D0", "D1", "D2"])
+
+
+class VendorAdsCommandTests(unittest.TestCase):
+    """The vendor-ads command: a corpus built over runs, never a snapshot."""
+
+    def _events(self, out, n=1):
+        from sled_trial import documents
+        documents.write_jsonl(
+            [{"business_unit": "7760", "event_id": f"000003986{i}"} for i in range(n)],
+            out / "events.jsonl")
+
+    def test_no_event_feed_is_an_error_not_an_empty_harvest(self) -> None:
+        import argparse
+        with tempfile.TemporaryDirectory() as tmp:
+            code = cli.cmd_vendor_ads(argparse.Namespace(
+                output=tmp, delay=0, browser_headers=False, limit=0))
+            self.assertEqual(code, 1)
+            self.assertFalse(
+                (pathlib.Path(tmp) / "vendor_ads_declared_interest.jsonl").exists(),
+                "wrote an empty cache over a missing feed")
+
+    def test_a_second_run_adds_to_the_cache_rather_than_replacing_it(self) -> None:
+        # Same shape that emptied caltrans_bidders.jsonl: writing only this run's rows.
+        import argparse
+        from unittest import mock
+
+        from sled_trial import documents
+        from sled_trial.sources.ca import vendor_ads
+
+        held = [{"business_unit": "7760", "event_id": "0000039999",
+                 "vendor_name_raw": "EARLIER CO", "interest_direction": "sub_seeking_prime",
+                 "intends_to_bid": False}]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            self._events(out)
+            documents.write_jsonl(held, out / "vendor_ads_declared_interest.jsonl")
+            with mock.patch.object(cli, "_session", lambda args: object()), \
+                    mock.patch.object(vendor_ads, "read_ad_page",
+                                      lambda session, bu, eid: "<html>no ads</html>"):
+                code = cli.cmd_vendor_ads(argparse.Namespace(
+                    output=tmp, delay=0, browser_headers=False, limit=0))
+            self.assertEqual(code, 0)
+            rows = [json.loads(l) for l in
+                    (out / "vendor_ads_declared_interest.jsonl").read_text().splitlines()
+                    if l.strip()]
+            self.assertEqual([r["vendor_name_raw"] for r in rows], ["EARLIER CO"])
+
+    def test_an_ad_is_declared_interest_and_never_a_bidder(self) -> None:
+        import argparse
+        from unittest import mock
+
+        from sled_trial.sources.ca import vendor_ads
+
+        page = ("<span id='ZZ_VNDR_AD_TBL_BUSINESS_UNIT'>7760</span>"
+                "<span id='ZZ_VNDR_AD_TBL_AUC_ID'>0000039860</span>"
+                "<span id='ZZ_VNDR_PRIM_VW_NAME1$0' >BIG PRIME INC</span>"
+                "<textarea id='ZZ_VNDR_PRIM_VW_DESCRLONG$0'>Seeking subs.</textarea>")
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            self._events(out)
+            with mock.patch.object(cli, "_session", lambda args: object()), \
+                    mock.patch.object(vendor_ads, "read_ad_page",
+                                      lambda session, bu, eid: page):
+                cli.cmd_vendor_ads(argparse.Namespace(
+                    output=tmp, delay=0, browser_headers=False, limit=0))
+            rows = [json.loads(l) for l in
+                    (out / "vendor_ads_declared_interest.jsonl").read_text().splitlines()
+                    if l.strip()]
+            self.assertEqual([r["participation"] for r in rows], ["declared_interest"])
+            self.assertTrue(rows[0]["intends_to_bid"], "prime seeking sub means it bids")
+
+
+class TestSuiteHygieneTests(unittest.TestCase):
+    """A test file must not define the same class name twice.
+
+    Python keeps the second and drops the first without a word, so the suite quietly
+    stops running tests that still look present in the file. Caught live: a new
+    `HarvestTests` in test_vendor_ads.py shadowed an existing one -- 27 tests defined,
+    25 collected, all green. A guard for the shape, not for that one name.
+    """
+
+    def test_no_test_file_defines_a_class_name_twice(self) -> None:
+        import ast
+        import collections as _c
+
+        offenders = []
+        for path in sorted(pathlib.Path(__file__).parent.glob("test_*.py")):
+            names = [n.name for n in ast.parse(path.read_text()).body
+                     if isinstance(n, ast.ClassDef)]
+            offenders += [f"{path.name}:{name}"
+                          for name, count in _c.Counter(names).items() if count > 1]
+        self.assertEqual(offenders, [],
+                         "shadowed test classes; the earlier one never runs")
+
+
+class PathVariableTests(unittest.TestCase):
+    """A name holding an output path must not be rebound to something else.
+
+    This exists because it happened: `cached` held `outdir / "awards.jsonl"`, was reused
+    a few lines later for the cached award *list*, and the sweep then died writing its
+    own results. It only fired on the full-sweep branch, so every --reuse-awards run
+    passed and two real runs lost ninety minutes each.
+
+    Checked with the AST rather than by grepping, so it catches the shape of the mistake
+    rather than one spelling of it.
+    """
+
+    def _path_names(self, func):
+        """Names assigned from an `outdir / ...` expression, i.e. holding a Path."""
+        import ast
+
+        names = set()
+        for node in ast.walk(func):
+            if not isinstance(node, ast.Assign):
+                continue
+            value = node.value
+            if (isinstance(value, ast.BinOp) and isinstance(value.op, ast.Div)
+                    and isinstance(value.left, ast.Name)
+                    and value.left.id in ("outdir", "directory", "dest")):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        names.add(target.id)
+        return names
+
+    def _rebinds(self, func, names):
+        """Those same names later assigned something that is not a path expression."""
+        import ast
+
+        bad = []
+        for node in ast.walk(func):
+            if not isinstance(node, ast.Assign):
+                continue
+            value = node.value
+            is_path = (isinstance(value, ast.BinOp) and isinstance(value.op, ast.Div))
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in names and not is_path:
+                    bad.append((target.id, getattr(node, "lineno", None)))
+        return bad
+
+    def _functions(self):
+        import ast
+
+        tree = ast.parse(pathlib.Path(cli.__file__).read_text())
+        return [n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name.startswith("cmd_")]
+
+    def test_no_command_rebinds_a_path_variable_to_a_non_path(self) -> None:
+        offenders = []
+        for func in self._functions():
+            names = self._path_names(func)
+            if names:
+                offenders += [(func.name, n, line)
+                              for n, line in self._rebinds(func, names)]
+        self.assertEqual(offenders, [],
+                         f"a path variable is reused for something else: {offenders}")
+
+    def test_the_check_would_have_caught_the_real_bug(self) -> None:
+        # Guards the guard: if the AST walk stops finding path assignments, the test
+        # above passes vacuously.
+        import ast
+
+        source = ("def cmd_x(args):\n"
+                  "    cached = outdir / 'awards.jsonl'\n"
+                  "    cached = read_rows('awards.jsonl')\n")
+        func = ast.parse(source).body[0]
+        names = self._path_names(func)
+        self.assertIn("cached", names)
+        self.assertTrue(self._rebinds(func, names))
+
+
+
+class MergeCacheTests(unittest.TestCase):
+    """A harvester's cache is a corpus built up over runs, not a snapshot of the last one."""
+
+    def _rows(self, path):
+        return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+
+    def test_fresh_rows_are_added_to_the_rows_already_held(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            (out / "c.jsonl").write_text(json.dumps({"k": 1, "v": "old"}) + "\n")
+            merged = assemble.merge_cache(out, "c.jsonl", [{"k": 2, "v": "new"}],
+                                          key=lambda r: r["k"])
+            self.assertEqual({r["k"] for r in merged}, {1, 2})
+            self.assertEqual({r["k"] for r in self._rows(out / "c.jsonl")}, {1, 2})
+
+    def test_a_fresh_row_replaces_the_held_row_with_the_same_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            (out / "c.jsonl").write_text(json.dumps({"k": 1, "v": "old"}) + "\n")
+            merged = assemble.merge_cache(out, "c.jsonl", [{"k": 1, "v": "new"}],
+                                          key=lambda r: r["k"])
+            self.assertEqual(merged, [{"k": 1, "v": "new"}])
+
+    def test_an_absent_cache_is_created_from_the_fresh_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            merged = assemble.merge_cache(out, "c.jsonl", [{"k": 1}], key=lambda r: r["k"])
+            self.assertEqual(merged, [{"k": 1}])
+            self.assertTrue((out / "c.jsonl").exists())
+
+
+class _NeverFetch:
+    """A session that must not be used: a fully-resumed run has nothing to fetch."""
+
+    def get(self, *args, **kwargs):
+        raise AssertionError("network touched on a fully-resumed run")
+
+
+class ResumeKeepsTheCacheTests(unittest.TestCase):
+    """Resuming skips units already held. It must not also forget their rows.
+
+    Reproduced before the fix: a `bidders` run whose every week was already held rewrote
+    caltrans_bidders.jsonl from 3 rows to 0. The same shape emptied awards.jsonl on a
+    second plain run of the README command.
+    """
+
+    def _rows(self, path):
+        return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+
+    def test_a_fully_held_bidders_run_keeps_the_rows_it_already_had(self) -> None:
+        import argparse
+        import datetime as dt
+        from unittest import mock
+
+        from sled_trial import documents, harvest_state
+        from sled_trial.sources.ca import caltrans
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            end = dt.date.today()
+            weeks = list(caltrans.week_slugs(end - dt.timedelta(weeks=2), end))
+            state = harvest_state.load(out)
+            for week in weeks:
+                harvest_state.record(state, "caltrans_bid_results", week, outcome="ok", rows=1)
+            harvest_state.save(out, state)
+            held = [{"business_unit": "2660", "event_id": f"E{i}", "vendor_name_raw": f"V{i}"}
+                    for i in range(3)]
+            documents.write_jsonl(held, out / "caltrans_bidders.jsonl")
+
+            with mock.patch.object(cli, "_session", lambda args: _NeverFetch()):
+                code = cli.cmd_bidders(argparse.Namespace(
+                    output=tmp, delay=0, browser_headers=False, weeks=2, resolve=False))
+            self.assertEqual(code, 0)
+            self.assertEqual(len(self._rows(out / "caltrans_bidders.jsonl")), 3)
+
+    def test_a_fully_held_award_sweep_keeps_the_awards_it_already_had(self) -> None:
+        import argparse
+        from unittest import mock
+
+        from sled_trial import documents, harvest_state, report
+        from sled_trial.sources.ca import scprs
+
+        awards = [{"purchase_doc": f"D{i}", "supplier_id": f"V{i}", "supplier_name": f"VENDOR {i}",
+                   "department": "Department of Motor Vehicles", "category": "IT Goods",
+                   "start_date": "09/01/2026", "awarded_amt": "$100.00",
+                   "acq_method": "Fair and Reasonable - COMPETITIVE"} for i in range(3)]
+        opportunity = {"business_unit": "2740", "event_id": "0000040075",
+                       "department": "Department of Motor Vehicles", "category": "IT Goods",
+                       "amount": 1000.0, "analysis_cutoff": "09/03/2026"}
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            documents.write_jsonl(awards, out / "awards.jsonl")
+            opp_path = out / "opportunity.json"
+            opp_path.write_text(json.dumps(opportunity))
+            # The whole default window was swept by an earlier run.
+            state = harvest_state.load(out)
+            key = scprs.slice_key({"from": assemble.default_awards_from("09/03/2026"),
+                                   "to": "09/03/2026"})
+            harvest_state.record(state, "caleprocure_scprs", key, outcome="ok", rows=3)
+            harvest_state.save(out, state)
+
+            previous_build = report.BUILD
+            try:
+                with mock.patch.object(cli, "_session", lambda args: _NeverFetch()), \
+                        mock.patch.object(cli.ca, "fetch_event_list", lambda session: ""):
+                    code = cli.cmd_analyze(argparse.Namespace(
+                        opportunity=str(opp_path), output=tmp, download_documents=False,
+                        raw_root=str(out / "raw"), no_ocr=True, delay=0,
+                        browser_headers=False, awards_from=None, reuse_awards=False,
+                        review_pages=20))
+            finally:
+                report.BUILD = previous_build
+            self.assertEqual(code, 0)
+            self.assertEqual({r["purchase_doc"] for r in self._rows(out / "awards.jsonl")},
+                             {"D0", "D1", "D2"})
+
+
+class InterruptedSweepTests(unittest.TestCase):
+    """Resume has to survive the kill it was built for.
+
+    The state file was saved once, after the sweep loop finished. So a run killed
+    part-way -- the memory kill named in harvest_state's own docstring -- held nothing
+    and the next run refetched every slice. Resumable only across a run that did not
+    need resuming.
+    """
+
+    def test_a_sweep_killed_part_way_keeps_the_slices_it_finished(self) -> None:
+        import argparse
+        from unittest import mock
+
+        from sled_trial import harvest_state, report
+        from sled_trial.sources.ca import scprs
+
+        row = {"purchase_doc": "D0", "supplier_id": "V0", "supplier_name": "VENDOR 0",
+               "department": "Department of Motor Vehicles", "category": "IT Goods",
+               "start_date": "09/01/2026", "awarded_amt": "$100.00",
+               "acq_method": "Fair and Reasonable - COMPETITIVE"}
+        opportunity = {"business_unit": "2740", "event_id": "0000040075",
+                       "department": "Department of Motor Vehicles", "category": "IT Goods",
+                       "amount": 1000.0, "analysis_cutoff": "09/03/2026"}
+
+        def torn(session, window_from, cutoff, *, subdivide_by=None, skip=(),
+                 on_slice=None):
+            on_slice("2026-09-01..2026-09-01", harvest_state.OK, 1)
+            yield {"rows": [row], "from": "09/01/2026", "to": "09/01/2026",
+                   "reported": 1, "truncated": False}
+            raise MemoryError("killed part-way, exactly as before")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            opp_path = out / "opportunity.json"
+            opp_path.write_text(json.dumps(opportunity))
+            previous_build = report.BUILD
+            try:
+                with mock.patch.object(cli, "_session", lambda args: _NeverFetch()), \
+                        mock.patch.object(cli.ca, "fetch_event_list", lambda session: ""), \
+                        mock.patch.object(scprs, "search_date_sliced", torn):
+                    with self.assertRaises(MemoryError):
+                        cli.cmd_analyze(argparse.Namespace(
+                            opportunity=str(opp_path), output=tmp,
+                            download_documents=False, raw_root=str(out / "raw"),
+                            no_ocr=True, delay=0, browser_headers=False,
+                            awards_from=None, reuse_awards=False, review_pages=20))
+            finally:
+                report.BUILD = previous_build
+
+            state = harvest_state.load(out)
+            self.assertTrue(harvest_state.is_done(
+                state, "caleprocure_scprs", "2026-09-01..2026-09-01"),
+                "the finished slice was not held; the next run refetches it")
+            rows = [json.loads(l) for l
+                    in (out / "awards.jsonl").read_text().splitlines() if l.strip()]
+            self.assertEqual([r["purchase_doc"] for r in rows], ["D0"],
+                             "the slice was held but its rows never reached disk")
+
+
+class OpportunityIntelligenceScopeTests(unittest.TestCase):
+    """The debrief is about one solicitation. Its known bidders are that solicitation's."""
+
+    def _intel(self, known):
+        return assemble._opportunity_intelligence(
+            {"business_unit": "2740", "event_id": "X"}, known=known,
+            prediction={}, lineage_result={}, documents_manifest=[])
+
+    def test_known_bidders_count_only_the_target_event(self) -> None:
+        known = [{"business_unit": "2740", "event_id": "X", "vendor_name_raw": "A"},
+                 {"business_unit": "2740", "event_id": "X", "vendor_name_raw": "B"},
+                 {"business_unit": "PB14424", "event_id": "9", "vendor_name_raw": "C"}]
+        out = self._intel(known)["known_bidders"]
+        self.assertEqual(out["count"], 2)
+        self.assertEqual({p["vendor_name_raw"] for p in out["participants"]}, {"A", "B"})
+
+    def test_the_debrief_does_not_repeat_claims_the_research_overturned(self) -> None:
+        text = json.dumps(self._intel([]))
+        self.assertNotIn("requires a login", text)
+        self.assertNotIn("publishes no bidder lists", text)
+        self.assertNotIn("no public bidder or planholder list", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -93,7 +93,11 @@ class NoMatchTraceTests(unittest.TestCase):
         trace = lineage.find_predecessors(OPP, events=[], awards=[], pages=[])["trace"]
         surfaces = {s["surface"]: s["reason"] for s in trace["surfaces_not_available"]}
         self.assertIn("caleprocure_response_bid_inquiry", surfaces)
-        self.assertIn("login", surfaces["caleprocure_response_bid_inquiry"])
+        reason = surfaces["caleprocure_response_bid_inquiry"]
+        # Tested 2026-09-10 with a supplier login: no respondent fields either way.
+        self.assertIn("login", reason)
+        self.assertIn("respondent", reason)
+        self.assertNotIn("not attempted", reason)
 
     def test_lineage_links_are_left_null_not_guessed(self) -> None:
         links = lineage.find_predecessors(OPP, events=[], awards=[], pages=[])["lineage_links"]

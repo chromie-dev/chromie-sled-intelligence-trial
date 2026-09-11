@@ -312,10 +312,11 @@ DEFAULT_RECORD_SOURCE = "caleprocure_event_list"
 def event_record_rows(events: Iterable[dict[str, Any]],
                       target: dict[str, Any] | None = None,
                       participants: Iterable[dict[str, Any]] = (),
+                      documents: Iterable[dict[str, Any]] = (),
                       ) -> list[dict[str, Any]]:
     """Solicitation records for every event this run refers to.
 
-    Three inputs, because three things can name a solicitation and only one of them is the
+    Four inputs, because four things can name a solicitation and only one of them is the
     active feed:
 
     * `events` — the feed, which lists open events only.
@@ -324,6 +325,11 @@ def event_record_rows(events: Iterable[dict[str, Any]],
     * `participants` — observed bidders. A harvested bidder field names solicitations the
       feed never carried, in Caltrans' case long closed and in San Francisco's case never
       state events at all. Without a record each of those participants dangles.
+    * `documents` — the retrieved document corpus, which accumulates across runs while
+      the feed only ever lists what is open today. An event that closed between two runs
+      leaves its already-downloaded documents parentless: 34 of them, found by the
+      evidence audit on the first real corpus it ran against. We fetched those files from
+      that solicitation, so the solicitation is a fact whether or not it is still listed.
 
     Each record is attributed to the registry that actually lists it, which is why a city
     solicitation does not claim to be a Cal eProcure event.
@@ -343,6 +349,8 @@ def event_record_rows(events: Iterable[dict[str, Any]],
     for candidate in participants:
         declared = sources.BY_KEY.get(candidate.get("source_key") or "")
         add(candidate, declared.record_source if declared else DEFAULT_RECORD_SOURCE)
+    for document in documents:
+        add(document, DEFAULT_RECORD_SOURCE)
 
     out = []
     for event in events:
@@ -430,6 +438,137 @@ def competitor_rows(profiles: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                  "role_evidence", "implausible_date_count", "win_rate_note")},
             "identity_confidence": profile.get("identity_confidence"),
             "observed_at": profile.get("observed_at") or _now(),
+        })
+    return out
+
+
+def observed_competitor_rows(observed: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A competitor row for every vendor we watched bid but could not resolve.
+
+    `competitor_rows` is built from award history, so it only knows vendors that have
+    won something. Every observed bidder without an SCPRS supplier id therefore had a
+    competitor id minted for it by `participant_rows` and no row emitted to match --
+    2,703 participants pointing at 1,786 records that did not exist. The companies were
+    in the data and unreachable from it, which defeats the point of a competitive
+    picture.
+
+    These are stubs, deliberately: observed is not profiled, and claiming otherwise
+    would imply award history we do not have. The id derivation matches
+    `participant_rows` exactly, because agreeing on the id is the whole fix.
+    """
+    from .vendors import normalize_name
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in observed:
+        if (row.get("supplier_id") or "").strip():
+            continue          # already has a row from the award-history side
+        name = (row.get("vendor_name_raw") or "").strip()
+        if name:
+            grouped.setdefault(name, []).append(row)
+
+    out = []
+    for name, rows in grouped.items():
+        first = rows[0]
+        source_key = first.get("source_key") or "document_extracted"
+        # A platform id identifies the vendor on that platform and nowhere else, so it
+        # is namespaced by its source and never written as an scprs_supplier_id.
+        identifiers = {}
+        vendor_id = first.get("vendor_id")
+        if vendor_id is not None:
+            identifiers[f"{source_key}_vendor_id"] = vendor_id
+        certifications = sorted({c for r in rows
+                                 for c in (r.get("classifications") or [])})
+        out.append({
+            "id": local_id("gov_competitors", "document_extracted", name),
+            "source_ref": local_id("gov_procurement_sources", source_key),
+            # No state supplier id exists for these; leaving it null is the honest
+            # statement that identity is unresolved rather than absent.
+            "external_source_id": None,
+            "legal_name": name,
+            "legal_name_normalized": normalize_name(name),
+            "aliases": sorted({(r.get("vendor_name_raw") or "").strip()
+                               for r in rows} - {name, ""}),
+            "public_identifiers": identifiers,
+            "certifications": certifications,
+            "profile_status": "stub",
+            "derived_profile": {
+                "observed_as_bidder": len(rows),
+                "solicitations": sorted({str(r.get("event_id")) for r in rows
+                                         if r.get("event_id")}),
+                "note": ("observed bidding but not matched to a state supplier id, so "
+                         "no award history is attached"),
+            },
+            "identity_confidence": "unresolved",
+            "observed_at": _now(),
+        })
+    return out
+
+
+# What a declared-interest row means depends on which surface published it, and the
+# two are not the same strength of signal. A planholder took the documents from the
+# agency's own portal; an advertiser posted a notice about itself. Collapsing them into
+# one "interested" bucket is the inflation the brief's six participation states exist
+# to prevent.
+DECLARED_INTEREST_ROLES = {
+    "planetbids_agency_portal": "planholder",
+    "caleprocure_vendor_ads": "interested_vendor",
+}
+
+
+def declared_interest_rows(declared: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Planholders and self-declared interest, kept apart from bidders.
+
+    Neither is a bid. A planholder list says who holds the package, which is the
+    strongest pre-close signal an agency publishes and is why 25,090 of these were
+    collected. An advertisement says a company wants work. Promoting either to
+    `known_bidder` would manufacture a competitive field, so the role is taken from the
+    publishing surface and there is no path here that emits a bidder.
+    """
+    out = []
+    for row in declared:
+        source_key = row.get("source_key") or ""
+        role = DECLARED_INTEREST_ROLES.get(source_key)
+        if role is None:
+            # An unmapped surface is skipped rather than guessed into a role. Silently
+            # defaulting is how a weak signal acquires a strong name.
+            continue
+        external = f"{row.get('business_unit')}/{row.get('event_id')}"
+        declared_source = sources.BY_KEY.get(source_key)
+        record_source = (declared_source.record_source if declared_source
+                         else "caleprocure_event_list")
+        record_id = local_id("gov_procurement_records", record_source,
+                             "solicitation", external)
+        competitor_id = local_id("gov_competitors", "document_extracted",
+                                 row.get("vendor_name_raw"))
+        vendor_id = row.get("vendor_id")
+        out.append({
+            "id": local_id("gov_procurement_participants", record_id, competitor_id,
+                           role),
+            "record_id": record_id, "competitor_id": competitor_id, "role": role,
+            "rank": None, "rank_basis": None,
+            "submitted_amount": None, "submitted_amount_raw": None,
+            "score": None,
+            # No supplier id exists on either surface, so identity is open by
+            # construction and any later match is a name match.
+            "identity_confidence": "unresolved",
+            "evidence_class": "observed",
+            "evidence": {
+                "source_key": source_key,
+                "url": row.get("evidence_url"),
+                "basis": ("named on the agency's planholder list"
+                          if role == "planholder"
+                          else "posted a vendor advertisement against this solicitation"),
+                # Flags that qualify the signal without changing the role. A pre-bid
+                # attendee is a stronger planholder; an ad saying "prime seeking sub"
+                # states an intent to bid that "sub seeking prime" does not.
+                "pre_bid_meeting_attendee": row.get("pre_bid_meeting_attendee"),
+                "intends_to_bid": row.get("intends_to_bid"),
+                "interest_direction": row.get("interest_direction"),
+                "generic_bid_assistance": row.get("generic_bid_assistance"),
+                "platform_vendor_id": ({source_key: vendor_id}
+                                       if vendor_id is not None else None),
+            },
+            "observed_at": _now(),
         })
     return out
 
