@@ -28,6 +28,8 @@ BIDDER_SOURCES = (
                  "caleprocure_event_list", "Caltrans bid results"),
     BidderSource("sfpublicworks_bid_tabulation", "sf_bidders.jsonl",
                  "sfpublicworks_bid_tabulation", "SF Public Works tabulations"),
+    BidderSource("planetbids_agency_portal", "planetbids_bidders.jsonl",
+                 "planetbids_agency_portal", "PlanetBids agency portals"),
 )
 
 BY_KEY = {source.key: source for source in BIDDER_SOURCES}

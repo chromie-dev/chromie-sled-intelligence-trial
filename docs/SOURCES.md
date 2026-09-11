@@ -245,9 +245,18 @@ clause in `SECURITY.md`.
 - **Gaps and caveats:** decentralised - one portal per agency keyed by a numeric
   `companyId`, with no public master directory, so the agency list is curated rather than
   discovered. `vendors.planetbids.com` and `pbsystem.planetbids.com` serve the same app.
-- **OPEN, and it blocks a wide sweep:** the published terms-of-use URL 302s to a host that
-  returns 405, so the automated-access terms could not be read. They need obtaining before
-  this is pointed at agency portals in volume.
+- **Terms, read 2026-09-10** at `home.planetbids.com/terms-and-conditions` (the
+  `/terms-of-use/` path 302s to a host returning 405; the working link is in the portal
+  footer). There is **no anti-scraping, robots, crawler or automated-access clause** — the
+  method is not restricted. The constraint is on *purpose*, §6: *"Users may print and
+  download portions of the materials solely in connection with the use of the Services
+  provided on this website… User shall not reproduce, duplicate, copy, sell, resell or
+  exploit for any commercial purpose the Services, website content or PlanetBids Tools."*
+  A commercial intelligence product plausibly falls inside that, so a wide sweep is a
+  business decision rather than an engineering one. The terms name their own remedy: a
+  special-use request to `customerservice@planetbids.com`. Counterpoint for whoever
+  decides: the underlying bid results are government public records held by the agencies
+  and obtainable from them directly.
 
 ## Dead ends, recorded so they are not retried
 

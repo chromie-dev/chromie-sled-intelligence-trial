@@ -448,6 +448,58 @@ def cmd_limits(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_planetbids(args: argparse.Namespace) -> int:
+    """Harvest PlanetBids agency portals: who bid, and who took out the documents.
+
+    One portal per agency, keyed by the numeric companyId in its URL. The API answers
+    403 to a bare client, so calls go through the loaded page -- the same GETs the app
+    itself issues.
+    """
+    from .net.browser import PortalJsonReader
+    from .sources.ca import planetbids as pb
+
+    outdir = pathlib.Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    registry = {r["company_id"]: r.get("agency_name") or "" for r in pb.curated_agencies()}
+    agencies = ([a.strip() for a in args.agency if a.strip()] if args.agency
+                else list(registry))
+    if not agencies:
+        print("  no agencies: pass --agency or populate sources/planetbids/agencies.csv")
+        return 1
+    candidates, interest, summaries = [], [], []
+
+    for cid in agencies:
+        print(f"  agency {cid} {registry.get(cid, '')}")
+        entry = pb.PORTAL.format(cid=cid)
+        try:
+            with PortalJsonReader(entry, delay_seconds=args.delay,
+                                  remote=not args.local_browser) as reader:
+                out = pb.harvest_agency(reader.fetch_json, cid,
+                                        max_bids=args.max_bids,
+                                        on_progress=lambda m: print(f"        {m}"))
+        except Exception as exc:
+            print(f"        FAILED: {type(exc).__name__}: {exc}")
+            summaries.append({"company_id": cid, "error":
+                              f"{type(exc).__name__}: {exc}"})
+            continue
+        candidates += out["candidates"]
+        interest += out["declared_interest"]
+        summaries.append({k: v for k, v in out.items()
+                          if k not in ("bids", "candidates", "declared_interest",
+                                       "documents")})
+        if not out["complete"]:
+            print(f"        WARNING: collected {out['bids_collected']} of "
+                  f"{out['bids_reported_by_portal']} solicitations the portal reported")
+
+    documents.write_jsonl(candidates, outdir / "planetbids_bidders.jsonl")
+    documents.write_jsonl(interest, outdir / "planetbids_declared_interest.jsonl")
+    (outdir / "planetbids_coverage.json").write_text(
+        json.dumps({"agencies": summaries}, indent=1, default=str))
+    print(f"\n{len(candidates)} bidder rows | {len(interest)} planholder rows "
+          f"across {len(agencies)} agency portal(s)")
+    return 0
+
+
 def cmd_analyze(args: argparse.Namespace) -> int:
     """The README deliverable command. Produces every required build/ artifact."""
     from . import lineage as lineage_mod
@@ -750,6 +802,16 @@ def build_parser() -> argparse.ArgumentParser:
     tb.add_argument("--page", action="append",
                     help="page to discover PDFs from; repeatable, defaults to the "
                          "commission calendar")
+    pbx = sub.add_parser("planetbids", parents=[common],
+                         help="harvest PlanetBids agency portals (names losing bidders)")
+    pbx.add_argument("--agency", action="append",
+                     help="numeric companyId; repeatable. Default: every agency in "
+                          "sources/planetbids/agencies.csv")
+    pbx.add_argument("--max-bids", type=int, default=None,
+                     help="cap solicitations per agency (default: all closed ones)")
+    pbx.add_argument("--local-browser", action="store_true",
+                     help="use local Chrome instead of a hosted session")
+
     au = sub.add_parser("auth", parents=[common],
                         help="sign in to a portal once and save the session")
     au.add_argument("--source", required=True,
@@ -773,7 +835,8 @@ def main(argv: list[str] | None = None) -> int:
     return {"events": cmd_events, "documents": cmd_documents, "analyze": cmd_analyze,
             "spending": cmd_spending, "evaluate": cmd_evaluate,
             "backfill-primes": cmd_backfill_primes, "bidders": cmd_bidders,
-            "tabulations": cmd_tabulations, "auth": cmd_auth, "limits": cmd_limits}[
+            "tabulations": cmd_tabulations, "auth": cmd_auth, "limits": cmd_limits,
+            "planetbids": cmd_planetbids}[
         args.command](args)
 
 

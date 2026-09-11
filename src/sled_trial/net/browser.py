@@ -179,3 +179,77 @@ def account_limits() -> dict:
             row["usage_error"] = f"{type(exc).__name__}: {exc}"
         out["projects"].append(row)
     return out
+
+
+class PortalJsonReader:
+    """Read a single-page app's own JSON API from inside its loaded page.
+
+    Some portals answer their API with 403 to any client that has not loaded the app --
+    PlanetBids is one. Rather than reconstructing whatever the app establishes, this
+    loads the page once and issues the same-origin GETs the app itself issues, so the
+    request is indistinguishable from the one a person clicking through would cause.
+
+    GET only, by construction: there is no method here that posts, and the fetch helper
+    below hard-codes the verb. Retrieval, not interaction.
+    """
+
+    _FETCH = """
+    async (url) => {
+      const r = await fetch(url, {method: 'GET', credentials: 'include'});
+      return {status: r.status, body: await r.text()};
+    }
+    """
+
+    def __init__(self, entry_url: str, *, delay_seconds: float = 1.0,
+                 remote: bool = True, context_id: str | None = None,
+                 settle_seconds: float = 6.0) -> None:
+        self.entry_url = entry_url
+        self.delay_seconds = delay_seconds
+        self.remote = remote
+        self.context_id = context_id
+        self.settle_seconds = settle_seconds
+        self._page: Any = None
+        self._closers: list = []
+        self.session_id: str | None = None
+
+    def __enter__(self) -> PortalJsonReader:
+        from playwright.sync_api import sync_playwright
+
+        playwright = sync_playwright().start()
+        self._closers.append(playwright.stop)
+        if self.remote:
+            session = create_session(context_id=self.context_id)
+            self.session_id = session["id"]
+            browser = playwright.chromium.connect_over_cdp(session["connectUrl"])
+            self._closers.append(browser.close)
+            context = browser.contexts[0]
+            self._page = context.pages[0] if context.pages else context.new_page()
+        else:
+            context = playwright.chromium.launch_persistent_context(
+                "build/browser-profile", headless=True, user_agent=UA)
+            self._closers.append(context.close)
+            self._page = context.pages[0] if context.pages else context.new_page()
+        self._page.goto(self.entry_url, wait_until="networkidle", timeout=120_000)
+        time.sleep(self.settle_seconds)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        for closer in reversed(self._closers):
+            try:
+                closer()
+            except Exception:
+                pass
+        self._closers.clear()
+        self._page = None
+
+    def fetch_json(self, url: str) -> Any:
+        import json as _json
+
+        if self._page is None:
+            raise RuntimeError("use PortalJsonReader as a context manager")
+        time.sleep(self.delay_seconds)
+        result = self._page.evaluate(self._FETCH, url)
+        if result["status"] != 200:
+            raise TransientFetchError(
+                f"HTTP {result['status']} for {url[:140]}: {result['body'][:200]}")
+        return _json.loads(result["body"])

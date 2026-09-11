@@ -20,9 +20,19 @@ and it is narrower and more useful than the negative:
 | SF Public Works tabulations | Every bidder, local-business status, price, **engineer's estimate** | 21 observations; 4 of 4 named more than one bidder |
 | Award-notice PDFs on Cal eProcure events | The awardee and the winning amount | 1 observation |
 
-Caltrans contract numbers **are** Cal eProcure event ids under business unit 2660, so that
-join is string equality rather than inference. San Francisco is a city, absent from the state
-portal, so its rows carry their own sourcing id and no state join is claimed.
+Caltrans contract numbers **are** Cal eProcure event ids under business unit 2660 — the
+id space and format match exactly (`01A6671` in the feed, `01A6607` from the results). But
+**the join does not fire on a snapshot, and measuring it is how we found out**: 0 of 75
+harvested Caltrans solicitations match any of the 80 open BU-2660 events. Cal eProcure lists
+open events; Caltrans publishes results for events that have already closed. Same ids,
+disjoint in time. The join is only possible if an event was captured while open and kept, so
+this is a harvesting-cadence problem rather than a matching problem, and no name
+normalisation or padding variant fixes it.
+
+San Francisco is a city, absent from the state portal, so its rows carry their own sourcing
+id and no state join is claimed. PlanetBids rows carry a `vendorId`, but it is a
+PlanetBids-internal identifier: it deduplicates a vendor across agency portals and does not
+cross into SCPRS `supplier_id`.
 
 Two limits carried in the data, not just here: results are preliminary pending SB/DVBE,
 licensing and bonding verification, so the low bidder is not yet the awardee; and Caltrans
