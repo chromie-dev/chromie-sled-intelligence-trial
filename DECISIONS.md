@@ -143,10 +143,20 @@ advance under automation, so a wider query must be sliced rather than paged. Dat
 alone left the reference window at 1,252 rows against 3,789 reported, with 6 of 7 single-day
 slices still capped. Two further axes now cut a capped day — acquisition method first, then
 business unit — and completeness is measured against the portal's own total rather than
-assumed: **4,769 rows collected against 4,924 reported (96.9%)**, with the 6 residual slices
-that still exceed the cap after both axes named in `build/awards_coverage.json`. The sweep
-also resumes: a slice that answered is not asked again, a slice that failed stays pending,
-and the rows already cached are carried rather than rewritten.
+assumed: **4,767 rows collected against 4,922 reported (96.9%)** over 553 slices, with the 6
+residual slices that still exceed the cap after both axes named in
+`build/awards_coverage.json`. The award corpus on disk is larger than one sweep's yield --
+4,892 rows -- because it is a union across runs, and the verdict states both so the two are
+never read as the same number.
+
+An earlier version of this paragraph quoted 4,769 of 4,924 from a sweep that died before
+writing its rows, next to an awards.jsonl holding 4,288. The completeness figure was right;
+the corpus was not. The two-row drift between the runs is the portal's, not ours.
+
+The sweep also resumes, and only a slice that actually answered is recorded: a bisected
+parent delegates to its halves and a subdivided parent waits for its children, because a
+recorded key means "never ask this again" and recording one too early is how a resume skips
+work nobody reports missing.
 
 ---
 
