@@ -105,6 +105,20 @@ def download(fetcher, which: str = "license_master", *,
     kept = pathlib.Path(best["path"])
     target = (directory / f"cslb_{which}.csv" if best["complete"]
               else directory / f"cslb_{which}.PARTIAL.csv")
+    # Keep the longest across runs, not just within one. A later run really did
+    # overwrite a 64,767-row fragment with a 59,873-row one: the retry loop compared
+    # attempts to each other and nothing compared the result to what was already there.
+    if not best["complete"] and target.exists():
+        existing = verify(target)
+        if existing["rows"] > best["rows"]:
+            kept.unlink(missing_ok=True)
+            best.update({"rows": existing["rows"], "path": str(target),
+                         "kept_previous_run": True,
+                         "note": (f"this run reached {best['rows']} rows; kept the "
+                                  f"existing {existing['rows']}-row file instead")})
+            say(f"{which}: kept the existing longer partial "
+                f"({existing['rows']} rows) over this run's {report['rows']}")
+            return best
     kept.replace(target)
     best["path"] = str(target)
     say(f"{which}: {'complete' if best['complete'] else 'INCOMPLETE'}, "

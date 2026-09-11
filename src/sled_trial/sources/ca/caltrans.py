@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from typing import Any, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 from .caleprocure import CalEProcureSession, _text
 from .scprs import amount_to_numeric
@@ -158,32 +158,57 @@ def bidder_candidates(solicitations: Iterable[dict[str, Any]], *,
     return rows
 
 
-def harvest(session: CalEProcureSession, start: dt.date, end: dt.date) -> dict[str, Any]:
+def harvest(session: CalEProcureSession, start: dt.date, end: dt.date,
+            *, skip: Iterable[str] = (),
+            on_week: Callable[[str, str, int], None] | None = None) -> dict[str, Any]:
     """Fetch every weekly page covering `start`..`end` and parse the bidder fields.
 
-    Weeks are reported in two lists rather than one count. An absent week is a page that
-    was never published, not a week in which nobody bid, and collapsing the two would let
-    a rolling-window boundary read as a market fact.
+    Weeks are reported in three lists rather than one count. An absent week is a page
+    that was never published, not a week in which nobody bid, and collapsing the two
+    would let a rolling-window boundary read as a market fact. A week that failed to
+    fetch is neither, and is kept apart so a rerun knows to ask again.
+
+    `skip` is weeks a caller already holds, which is what makes a long backfill
+    resumable: Caltrans keeps roughly nine months, so a twelve-month attempt has to
+    survive being interrupted. `on_week` is called with (slug, outcome, rows) so the
+    caller can record progress as it happens rather than only at the end.
     """
+    done = {str(x) for x in skip}
     solicitations: list[dict[str, Any]] = []
     populated: list[str] = []
     absent: list[str] = []
+    failed: list[dict[str, str]] = []
+    skipped: list[str] = []
+    note = on_week or (lambda slug, outcome, rows: None)
     for slug in week_slugs(start, end):
+        if slug in done:
+            skipped.append(slug)
+            continue
         url = WEEK_URL.format(date=slug)
-        body, _ = session.get(url)
+        try:
+            body, _ = session.get(url)
+        except Exception as exc:
+            failed.append({"week": slug, "error": f"{type(exc).__name__}: {exc}"})
+            note(slug, "failed", 0)
+            continue
         page = body.decode("utf-8", "replace")
         if not looks_populated(page):
             absent.append(slug)
+            note(slug, "empty", 0)
             continue
         populated.append(slug)
-        for sol in parse_bid_results(page):
+        found = parse_bid_results(page)
+        for sol in found:
             sol["week"] = slug
             sol["source_url"] = url
             solicitations.append(sol)
+        note(slug, "ok", len(found))
     return {
         "solicitations": solicitations,
         "weeks_populated": populated,
         "weeks_absent": absent,
+        "weeks_failed": failed,
+        "weeks_skipped": skipped,
         "absent_note": ("these slugs returned HTTP 200 with an empty template; the page "
                         "was never published, which is not evidence that no bids opened"),
     }

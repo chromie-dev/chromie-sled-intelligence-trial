@@ -483,10 +483,17 @@ def participant_rows(observed: Iterable[dict[str, Any]],
             "id": local_id("gov_procurement_participants", record_id, competitor_id,
                            "known_bidder"),
             "record_id": record_id, "competitor_id": competitor_id,
-            # Rank is null for a document-extracted candidate -- an intent-to-award notice
-            # names one company -- but the Caltrans bid-results page publishes the whole
-            # field in order, and that ordering is the evidence.
-            "role": "known_bidder", "rank": candidate.get("rank"),
+            # Rank is null for a document-extracted candidate -- an intent-to-award
+            # notice names one company -- but the Caltrans bid-results page publishes
+            # the whole field in order, and that ordering is the evidence. Where a
+            # source publishes amounts without ranking them, the adapter derives the
+            # order and it is carried here; `rank_basis` says which it is, so a derived
+            # position is never read as one the agency stated.
+            "role": "known_bidder",
+            "rank": candidate.get("rank") or candidate.get("derived_rank"),
+            "rank_basis": ("stated" if candidate.get("rank")
+                           else "derived_from_amount" if candidate.get("derived_rank")
+                           else None),
             "submitted_amount": (float(candidate["amount_numeric"])
                                  if candidate.get("amount_numeric") else None),
             "submitted_amount_raw": candidate.get("amount_raw"),
@@ -501,6 +508,14 @@ def participant_rows(observed: Iterable[dict[str, Any]],
                          "sha256": candidate.get("sha256"),
                          "url": candidate.get("evidence_url"),
                          "bidders_on_this_solicitation": candidate.get("bidder_count"),
+                         # A platform vendor id, where the source has one. Namespaced
+                         # under its source key because it is NOT an SCPRS supplier_id:
+                         # it deduplicates a vendor across that platform's agencies and
+                         # does not cross into state data.
+                         "platform_vendor_id": (
+                             {candidate["source_key"]: candidate["vendor_id"]}
+                             if candidate.get("vendor_id") and candidate.get("source_key")
+                             else None),
                          "evidence_row": candidate.get("evidence_row")},
             "observed_at": _now(),
         })

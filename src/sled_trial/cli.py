@@ -17,7 +17,7 @@ import pathlib
 import sys
 from typing import Any
 
-from . import assemble, documents, extract, sources
+from . import assemble, documents, extract, harvest_state, sources
 from .assemble import (ENRICHMENTS, _opportunity_intelligence, _participants,
                        _read_jsonl, _source_coverage)
 from .sources.ca import caleprocure as ca
@@ -216,7 +216,26 @@ def cmd_bidders(args: argparse.Namespace) -> int:
     print(f"harvesting Caltrans bid results, {start} to {end}")
 
     session = _session(args)
-    result = caltrans.harvest(session, start, end)
+    # Resume rather than restart. Caltrans keeps roughly nine months, so a long backfill
+    # has to survive interruption -- and one run really was killed mid-sweep for memory,
+    # taking an hour of throttled requests with it.
+    state = harvest_state.load(outdir)
+    weeks = [s for s in caltrans.week_slugs(start, end)]
+    todo = harvest_state.pending(state, "caltrans_bid_results", weeks)
+    if len(todo) < len(weeks):
+        print(f"  {len(weeks) - len(todo)} of {len(weeks)} weeks already held; "
+              f"fetching {len(todo)}")
+
+    def note(slug: str, outcome: str, rows: int) -> None:
+        harvest_state.record(state, "caltrans_bid_results", slug,
+                             outcome=outcome, rows=rows)
+
+    result = caltrans.harvest(session, start, end,
+                              skip=set(weeks) - set(todo), on_week=note)
+    harvest_state.save(outdir, state)
+    if result["weeks_failed"]:
+        print(f"  WARNING: {len(result['weeks_failed'])} week(s) failed and will be "
+              f"retried on the next run")
     candidates = caltrans.bidder_candidates(result["solicitations"])
 
     if args.resolve:
@@ -448,6 +467,32 @@ def cmd_limits(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_coverage(args: argparse.Namespace) -> int:
+    """One reconciled account of what the pipeline holds, across every source.
+
+    Joins the static research in the source registry to what each harvester reported on
+    its last run and when that run last wrote anything.
+    """
+    outdir = pathlib.Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    cov = assemble.unified_coverage(outdir)
+    (outdir / "coverage.json").write_text(json.dumps(cov, indent=1, default=str))
+
+    print(f"  {cov['sources_harvested']} of {cov['sources_tracked']} sources harvested, "
+          f"{cov['total_failures']} failures\n")
+    print(f"  {'source':<32}{'rows':>8}{'of portal':>11}  last sync")
+    for e in cov["sources"]:
+        target = ("-" if e["reported_by_portal"] is None
+                  or not e["reported_is_portal_total"]
+                  else str(e["reported_by_portal"]))
+        flag = "" if not e["shortfall"] else f"  SHORT {e['shortfall']}"
+        print(f"  {e['source_key']:<32}{e['rows_on_disk']:>8}{target:>11}  "
+              f"{(e['last_sync'] or 'never')[:10]}{flag}")
+    if cov["sources_never_harvested"]:
+        print(f"\n  never harvested: {', '.join(cov['sources_never_harvested'])}")
+    return 0
+
+
 def cmd_sacramento(args: argparse.Namespace) -> int:
     """Harvest the City of Sacramento Bid Activities layer (ArcGIS open data).
 
@@ -513,6 +558,7 @@ def cmd_cslb(args: argparse.Namespace) -> int:
     reports = []
     for which in (args.file or ["license_master"]):
         report = cslb.download(session, which, dest=args.raw_root_registries,
+                               attempts=args.attempts,
                                on_progress=lambda m: print(f"        {m}"))
         reports.append(report)
         if not report["complete"]:
@@ -611,8 +657,13 @@ def cmd_planetbids(args: argparse.Namespace) -> int:
         print(f"  agency {cid} {registry.get(cid, '')}")
         entry = pb.PORTAL.format(cid=cid)
         try:
+            # Three GETs per solicitation plus latency, so ask for a session long
+            # enough to finish. The default 600s expires mid-loop and surfaces as a
+            # navigation error rather than as an expiry.
+            budget = 900 if args.max_bids is None else max(600, int(args.max_bids * 8))
             with PortalJsonReader(entry, delay_seconds=args.delay,
-                                  remote=not args.local_browser) as reader:
+                                  remote=not args.local_browser,
+                                  session_seconds=min(budget, 21600)) as reader:
                 out = pb.harvest_agency(reader.fetch_json, cid,
                                         max_bids=args.max_bids,
                                         on_progress=lambda m: print(f"        {m}"))
@@ -816,6 +867,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         json.dumps(intelligence, indent=1, default=str))
     (outdir / "source_coverage.json").write_text(
         json.dumps(_source_coverage(), indent=1, default=str))
+    # Reconciled coverage across every source, not just the ones this run touched.
+    unified = assemble.unified_coverage(outdir)
+    (outdir / "coverage.json").write_text(json.dumps(unified, indent=1, default=str))
+    if unified["sources_short_of_portal_total"]:
+        print("        coverage: short of the portal total on "
+              + ", ".join(unified["sources_short_of_portal_total"]))
 
     # Review queue: identity conflicts, plus every low-confidence prediction, so nothing
     # weak is presented without a route to human review.
@@ -941,6 +998,9 @@ def build_parser() -> argparse.ArgumentParser:
     tb.add_argument("--page", action="append",
                     help="page to discover PDFs from; repeatable, defaults to the "
                          "commission calendar")
+    sub.add_parser("coverage", parents=[common],
+                   help="reconcile what every source collected against what it reported")
+
     sac_p = sub.add_parser("sacramento", parents=[common],
                            help="harvest the Sacramento bid activities open dataset")
 
@@ -952,6 +1012,9 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("--file", action="append",
                     choices=["license_master", "workers_comp", "personnel"],
                     help="which register file; repeatable (default: license_master)")
+    cs.add_argument("--attempts", type=int, default=4,
+                    help="how many times to retry a torn transfer; the longest "
+                         "attempt is kept")
     cs.add_argument("--raw-root-registries", default="data/raw/registries",
                     help="where the register files are written")
 
@@ -1000,7 +1063,8 @@ def main(argv: list[str] | None = None) -> int:
             "backfill-primes": cmd_backfill_primes, "bidders": cmd_bidders,
             "tabulations": cmd_tabulations, "auth": cmd_auth, "limits": cmd_limits,
             "planetbids": cmd_planetbids,
-            "lpa": cmd_lpa, "suppliers": cmd_suppliers, "cslb": cmd_cslb, "csu": cmd_csu, "sacramento": cmd_sacramento}[
+            "lpa": cmd_lpa, "suppliers": cmd_suppliers, "cslb": cmd_cslb, "csu": cmd_csu, "sacramento": cmd_sacramento,
+            "coverage": cmd_coverage}[
         args.command](args)
 
 

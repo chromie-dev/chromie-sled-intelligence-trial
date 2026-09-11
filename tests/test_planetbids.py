@@ -230,9 +230,6 @@ class HarvestTests(unittest.TestCase):
         self.assertEqual(out["failures"], [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class CommandTests(unittest.TestCase):
     """The command body must actually run. A missing helper here is a NameError that
@@ -310,3 +307,63 @@ class DerivedRankTests(unittest.TestCase):
                                    pb.parse_responses(RESPONSES), cid=14424)[0]
         self.assertIsNone(row["rank"])
         self.assertIn("derived_rank", row)
+
+DOCUMENTS = {"data": [
+    {"type": "bid-downloadable-files", "id": "527484", "attributes": {
+        "downloadableFileId": 527484, "fileTitle": "RFP Energy Efficiency Consulting",
+        "filename": "CAO-153605-v1-RFP_-_Energy_Efficiency_Consultant.pdf",
+        "fileSize": 323368, "serverFullPath": "files-prod01.planetbids.com/Anaheim/BMfiles/",
+        "serverFilename": "20241206132307123 CAO-153605-v1-RFP_-_Energy_Efficiency_Consultant.pdf",
+        "sortLabel": "1", "recalled": False, "publiclyVisible": False,
+        "uploadedDate": "2024-12-06 13:23:07.123", "bidId": 124517}},
+    {"type": "bid-downloadable-files", "id": "527500", "attributes": {
+        "downloadableFileId": 527500, "fileTitle": "Addendum 1", "filename": "add1.pdf",
+        "fileSize": 1024, "serverFullPath": "", "serverFilename": "",
+        "recalled": True, "publiclyVisible": True, "bidId": 124517}},
+]}
+
+
+class DocumentTests(unittest.TestCase):
+    """Field names verified against a live response, not guessed.
+
+    An earlier version looked for `fileId`, `fileName` and `requiresLogin`, none of
+    which exist -- so every filename came back empty and every document looked publicly
+    readable. Both failures were silent.
+    """
+
+    def test_the_real_field_names_are_read(self) -> None:
+        doc = pb.parse_documents(DOCUMENTS)[0]
+        self.assertEqual(doc["file_id"], 527484)
+        self.assertEqual(doc["file_name"],
+                         "CAO-153605-v1-RFP_-_Energy_Efficiency_Consultant.pdf")
+        self.assertEqual(doc["size_bytes"], 323368)
+        self.assertEqual(doc["title"], "RFP Energy Efficiency Consulting")
+
+    def test_the_login_gate_is_carried_rather_than_assumed_open(self) -> None:
+        docs = pb.parse_documents(DOCUMENTS)
+        self.assertFalse(docs[0]["publicly_visible"])
+        self.assertTrue(docs[1]["publicly_visible"])
+
+    def test_a_recalled_document_is_flagged_not_dropped(self) -> None:
+        # Usually superseded by an addendum. The caller decides, not the parser.
+        docs = pb.parse_documents(DOCUMENTS)
+        self.assertFalse(docs[0]["recalled"])
+        self.assertTrue(docs[1]["recalled"])
+
+    def test_the_download_url_quotes_the_stored_filename(self) -> None:
+        # Stored names routinely contain spaces, so pasting them yields a broken URL.
+        self.assertEqual(
+            pb.parse_documents(DOCUMENTS)[0]["download_url"],
+            "https://files-prod01.planetbids.com/Anaheim/BMfiles/"
+            "20241206132307123%20CAO-153605-v1-RFP_-_Energy_Efficiency_Consultant.pdf")
+
+    def test_a_document_with_no_server_path_has_no_url(self) -> None:
+        self.assertIsNone(pb.parse_documents(DOCUMENTS)[1]["download_url"])
+
+    def test_document_url_needs_both_halves(self) -> None:
+        self.assertIsNone(pb.document_url("host/dir/", None))
+        self.assertIsNone(pb.document_url(None, "file.pdf"))
+
+
+if __name__ == "__main__":
+    unittest.main()

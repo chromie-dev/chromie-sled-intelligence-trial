@@ -22,6 +22,7 @@ itself, which is what keeps the module testable offline and read-only by constru
 from __future__ import annotations
 
 import datetime as dt
+import urllib.parse
 from typing import Any, Callable, Iterable, Iterator
 
 API = "https://api-external.prod.planetbids.com/papi"
@@ -180,17 +181,47 @@ def parse_responses(payload: Any) -> list[dict[str, Any]]:
 
 
 def parse_documents(payload: Any) -> list[dict[str, Any]]:
+    """Documents attached to a solicitation.
+
+    Field names are as the API returns them, verified against a live response rather
+    than guessed: an earlier version looked for `fileId`, `fileName` and `requiresLogin`,
+    none of which exist, so every filename came back empty and every document looked
+    publicly readable.
+
+    `publiclyVisible` is the login gate the portal shows as an asterisk in its own
+    document list, and `recalled` marks a file the agency has withdrawn -- usually
+    superseded by an addendum. Both are carried rather than filtered, so a caller
+    decides what to fetch.
+    """
     out = []
     for a in _rows(payload):
+        server_path = (a.get("serverFullPath") or "").strip()
+        server_name = (a.get("serverFilename") or "").strip()
         out.append({
             "bid_id": a.get("bidId"),
-            "file_id": a.get("fileId") or a.get("id"),
-            "title": (a.get("title") or a.get("fileTitle") or "").strip(),
-            "file_name": (a.get("fileName") or "").strip(),
-            "size": a.get("fileSize") or a.get("size"),
-            "requires_login": bool(a.get("requiresLogin") or a.get("loginRequired")),
+            "file_id": a.get("downloadableFileId"),
+            "title": (a.get("fileTitle") or "").strip() or None,
+            "file_name": (a.get("filename") or "").strip() or None,
+            "size_bytes": a.get("fileSize"),
+            "uploaded": a.get("uploadedDate"),
+            "sort_label": (a.get("sortLabel") or "").strip() or None,
+            "publicly_visible": bool(a.get("publiclyVisible")),
+            "recalled": bool(a.get("recalled")),
+            "download_url": document_url(server_path, server_name),
         })
     return out
+
+
+def document_url(server_path: str | None, server_filename: str | None) -> str | None:
+    """Where a document actually lives.
+
+    The API returns the host and directory separately from the stored filename, and the
+    stored name routinely contains spaces, so it has to be quoted rather than pasted.
+    """
+    if not server_path or not server_filename:
+        return None
+    path = server_path.strip().strip("/")
+    return f"https://{path}/{urllib.parse.quote(server_filename.strip())}"
 
 
 def with_derived_rank(responses: list[dict[str, Any]]) -> list[dict[str, Any]]:

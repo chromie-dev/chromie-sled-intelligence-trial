@@ -191,6 +191,58 @@ class BidderCandidateTests(unittest.TestCase):
                          caltrans.WEEK_URL.format(date="2026-01-11"))
         self.assertEqual(low["evidence_row"], "Ware Disposal Inc. | SB: N | $436,020.00")
 
+class ResumeTests(unittest.TestCase):
+    """Caltrans keeps roughly nine months, so a twelve-month backfill must survive
+    being interrupted. One real run was killed mid-sweep and lost an hour of throttled
+    requests."""
+
+    def _session(self):
+        return FakeSession({caltrans.WEEK_URL.format(date="2026-01-11"): WEEK_PAGE})
+
+    def test_weeks_already_held_are_not_refetched(self) -> None:
+        session = self._session()
+        out = caltrans.harvest(session, dt.date(2026, 1, 11), dt.date(2026, 1, 25),
+                               skip={"2026-01-11"})
+        self.assertEqual(out["weeks_skipped"], ["2026-01-11"])
+        self.assertNotIn(caltrans.WEEK_URL.format(date="2026-01-11"), session.requested)
+        self.assertEqual(len(session.requested), 2)
+
+    def test_progress_is_reported_per_week_as_it_happens(self) -> None:
+        # Recording only at the end means a killed run records nothing.
+        seen = []
+        caltrans.harvest(self._session(), dt.date(2026, 1, 11), dt.date(2026, 1, 25),
+                         on_week=lambda slug, outcome, rows: seen.append(
+                             (slug, outcome, rows)))
+        self.assertEqual(seen, [("2026-01-11", "ok", 2),
+                                ("2026-01-18", "empty", 0),
+                                ("2026-01-25", "empty", 0)])
+
+    def test_a_week_that_fails_is_kept_apart_from_one_that_was_empty(self) -> None:
+        # Empty means the page was never published. Failed means we never saw it. A
+        # backfill that conflates them develops holes it cannot detect.
+        class Broken(FakeSession):
+            def get(self, url, referer=None, timeout=120):
+                if "2026-01-18" in url:
+                    raise OSError("connection reset")
+                return super().get(url, referer, timeout)
+
+        out = caltrans.harvest(Broken({caltrans.WEEK_URL.format(date="2026-01-11"):
+                                       WEEK_PAGE}),
+                               dt.date(2026, 1, 11), dt.date(2026, 1, 25))
+        self.assertEqual(out["weeks_absent"], ["2026-01-25"])
+        self.assertEqual([f["week"] for f in out["weeks_failed"]], ["2026-01-18"])
+
+    def test_a_failed_week_stays_pending_while_an_empty_one_does_not(self) -> None:
+        from sled_trial import harvest_state as hs
+
+        state = {"sources": {}}
+        caltrans.harvest(self._session(), dt.date(2026, 1, 11), dt.date(2026, 1, 25),
+                         on_week=lambda slug, outcome, rows: hs.record(
+                             state, "caltrans_bid_results", slug,
+                             outcome=outcome, rows=rows))
+        weeks = list(caltrans.week_slugs(dt.date(2026, 1, 11), dt.date(2026, 1, 25)))
+        self.assertEqual(hs.pending(state, "caltrans_bid_results", weeks), [])
+
 
 if __name__ == "__main__":
     unittest.main()

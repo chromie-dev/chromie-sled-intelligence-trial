@@ -279,10 +279,11 @@ clause in `SECURITY.md`.
   sources, which otherwise publish names only or a platform id that stops at its edge
 - Access: download, ASP.NET postback, chunked CSV. No charge, no login
 - Verified: 2026-09-10
-- **Gaps and caveats:** the transfer tears at a different point every run — 15.5MB, then
-  6.5MB, then a best-of-four at 20MB and 64,767 rows against roughly 290,000. Retries
-  improve it and do not finish it, so the file is held under a `.PARTIAL` name and never
-  promoted. The fragment is ordered by licence number, so it is a front slice biased to
+- **Gaps and caveats:** the transfer is cut short every run, and twelve attempts
+  plateau at 48,000-65,000 rows and roughly 20MB against a register of about 290,000.
+  That is a server-side ceiling rather than flakiness, and retrying harder was measured
+  and does not help: best of four attempts was 64,767 rows, best of twelve was 59,873.
+  The file is held under a `.PARTIAL` name and never promoted. The fragment is ordered by licence number, so it is a front slice biased to
   older licences rather than a sample. The portal also offers lists by classification
   (78 values, up to ten per download) and by county, which would give files small enough
   to complete; that form posts a multi-select listbox and the flow is not yet worked out.

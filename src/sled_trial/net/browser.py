@@ -140,11 +140,24 @@ def _client() -> Any:
     return Browserbase(api_key=key)
 
 
-def create_session(*, context_id: str | None = None, persist: bool = False) -> dict:
+def create_session(*, context_id: str | None = None, persist: bool = False,
+                   session_seconds: int | None = None) -> dict:
+    """Open a hosted browser session.
+
+    `session_seconds` raises the session's own lifetime. The project default is 600s,
+    which a long harvest outruns -- and it does so by having the browser vanish
+    mid-loop, which surfaces as a navigation error rather than as "your session
+    expired". Set it from how long the work will actually take.
+    """
+    kwargs: dict[str, Any] = {}
     settings: dict[str, Any] = {}
     if context_id:
         settings["context"] = {"id": context_id, "persist": persist}
-    session = _client().sessions.create(**({"browser_settings": settings} if settings else {}))
+    if settings:
+        kwargs["browser_settings"] = settings
+    if session_seconds:
+        kwargs["api_timeout"] = session_seconds
+    session = _client().sessions.create(**kwargs)
     return {"id": session.id, "connectUrl": session.connect_url}
 
 
@@ -202,12 +215,14 @@ class PortalJsonReader:
 
     def __init__(self, entry_url: str, *, delay_seconds: float = 1.0,
                  remote: bool = True, context_id: str | None = None,
-                 settle_seconds: float = 6.0) -> None:
+                 settle_seconds: float = 6.0,
+                 session_seconds: int | None = None) -> None:
         self.entry_url = entry_url
         self.delay_seconds = delay_seconds
         self.remote = remote
         self.context_id = context_id
         self.settle_seconds = settle_seconds
+        self.session_seconds = session_seconds
         self._page: Any = None
         self._closers: list = []
         self.session_id: str | None = None
@@ -218,7 +233,8 @@ class PortalJsonReader:
         playwright = sync_playwright().start()
         self._closers.append(playwright.stop)
         if self.remote:
-            session = create_session(context_id=self.context_id)
+            session = create_session(context_id=self.context_id,
+                                     session_seconds=self.session_seconds)
             self.session_id = session["id"]
             browser = playwright.chromium.connect_over_cdp(session["connectUrl"])
             self._closers.append(browser.close)

@@ -67,3 +67,56 @@ class ConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KeepTheLongestTests(unittest.TestCase):
+    """A retry exists to improve on a fragment, never to replace it with a smaller one.
+
+    Observed live: a twelve-attempt run reached 59,873 rows and overwrote an existing
+    64,767-row file, because the loop compared attempts to each other and nothing
+    compared the result to what was already on disk.
+    """
+
+    class FakeFetcher:
+        """Serves a fixed short file, so any existing longer one must win."""
+
+        def __init__(self, body: bytes):
+            self.body = body
+            self._opener = self
+
+        def get(self, url, referer=None, timeout=120):
+            page = ('<input type="hidden" name="__VIEWSTATE" value="x">'
+                    '<a id="MainContent_lbMasterCSV">CSV</a>')
+            return page.encode(), {}
+
+        def open(self, request, timeout=None):
+            import io
+            body = self.body
+            page = ('<input type="hidden" name="__VIEWSTATE" value="x">'
+                    '<a id="MainContent_lbMasterCSV">CSV</a>').encode()
+            payload = page if b"ddlStatus" in (request.data or b"") else body
+
+            class Resp(io.BytesIO):
+                def __enter__(self_inner):
+                    return self_inner
+
+                def __exit__(self_inner, *exc):
+                    return False
+
+            return Resp(payload)
+
+    def test_an_existing_longer_partial_is_not_replaced(self) -> None:
+        directory = pathlib.Path(tempfile.mkdtemp())
+        existing = directory / "cslb_license_master.PARTIAL.csv"
+        existing.write_text(HEADER + ROWS * 40 + "torn,row,without,newline")
+        before = cslb.verify(existing)["rows"]
+
+        short = (HEADER + ROWS + "torn,row").encode()
+        report = cslb.download(self.FakeFetcher(short), "license_master",
+                               dest=directory, attempts=1)
+        self.assertTrue(report.get("kept_previous_run"))
+        # the longer file is still there, untouched
+        self.assertEqual(cslb.verify(existing)["rows"], before)
+        self.assertEqual(report["rows"], before)
+        # and this run's shorter attempt was not left lying around
+        self.assertEqual(list(directory.glob(".cslb_*")), [])

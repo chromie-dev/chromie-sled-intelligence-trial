@@ -10,7 +10,7 @@ import csv
 import datetime as dt
 import json
 import pathlib
-from typing import Any, Iterable
+from typing import Any, Iterable, NamedTuple
 
 from . import documents, extract, sources
 from .vendors import normalize_name
@@ -385,4 +385,217 @@ def target_listing_state(opportunity: dict[str, Any],
                  "signal Cal eProcure gives — the event has closed or been withdrawn. Its "
                  "documents may still be retrievable by identifier, so a zero-document "
                  "result here means the event is gone, not that it carried no attachments"),
+    }
+
+
+# --- unified coverage -------------------------------------------------------------
+#
+# Each harvester reports what it collected in its own shape, which is fine for the
+# command that wrote it and useless for answering "what do we actually have?". This
+# reconciles them into one table: per source, what was collected against what the portal
+# said existed, when it last succeeded, and what is known to be missing.
+#
+# A source appears here whether or not it has ever run. An absent cache is reported as
+# "never harvested", which is a different answer from "harvested and empty" -- the same
+# distinction the soft-404 handling makes, applied at the level of the whole pipeline.
+
+class CoverageSource(NamedTuple):
+    """How to read one harvester's own account of itself."""
+
+    source_key: str
+    coverage_file: str | None
+    caches: tuple[str, ...]
+    reader: str            # name of the _cov_* function below
+
+
+COVERAGE_SOURCES = (
+    CoverageSource("caleprocure_event_list", None, ("events.jsonl",), "_cov_rows"),
+    CoverageSource("caleprocure_scprs", "awards_coverage.json",
+                   ("awards.jsonl",), "_cov_awards"),
+    CoverageSource("caltrans_bid_results", "caltrans_bid_results.json",
+                   ("caltrans_bidders.jsonl",), "_cov_rows"),
+    CoverageSource("sfpublicworks_bid_tabulation", None,
+                   ("sf_bidders.jsonl",), "_cov_rows"),
+    CoverageSource("planetbids_agency_portal", "planetbids_coverage.json",
+                   ("planetbids_bidders.jsonl", "planetbids_declared_interest.jsonl"),
+                   "_cov_planetbids"),
+    CoverageSource("csu_public_bid_portal", "csu_coverage.json",
+                   ("csu_solicitations.jsonl",), "_cov_csu"),
+    CoverageSource("sacramento_bid_activities", "sacramento_coverage.json",
+                   ("sacramento_solicitations.jsonl",), "_cov_sacramento"),
+    CoverageSource("caleprocure_lpa", "lpa_coverage.json",
+                   ("lpa_vehicles.json",), "_cov_lpa"),
+    CoverageSource("caleprocure_supplier_search", "supplier_locations_coverage.json",
+                   ("supplier_locations.json",), "_cov_suppliers"),
+    CoverageSource("cslb_license_master", "cslb_coverage.json",
+                   ("../data/raw/registries/cslb_license_master.PARTIAL.csv",
+                    "../data/raw/registries/cslb_license_master.csv"), "_cov_cslb"),
+)
+
+
+def _cov_rows(cov: Any, rows: int) -> dict[str, Any]:
+    return {"collected": rows, "reported": None, "complete": None}
+
+
+def _cov_awards(cov: Any, rows: int) -> dict[str, Any]:
+    cov = cov or {}
+    return {"collected": cov.get("rows_collected", rows),
+            "reported": cov.get("rows_reported_by_portal"),
+            "complete": cov.get("complete"),
+            "note": cov.get("note")}
+
+
+def _cov_planetbids(cov: Any, rows: int) -> dict[str, Any]:
+    agencies = (cov or {}).get("agencies", [])
+    return {"collected": sum(a.get("bids_collected") or 0 for a in agencies) or None,
+            "reported": sum(a.get("bids_reported_by_portal") or 0 for a in agencies) or None,
+            "complete": all(a.get("complete") for a in agencies) if agencies else None,
+            "rows": rows,
+            "failures": sum(len(a.get("failures") or []) for a in agencies),
+            "absent": sum(len(a.get("absent") or []) for a in agencies),
+            "agencies": len(agencies)}
+
+
+def _cov_csu(cov: Any, rows: int) -> dict[str, Any]:
+    cov = cov or {}
+    return {"collected": rows, "reported": None, "complete": None,
+            "failures": len(cov.get("failures") or []),
+            "campuses": len(cov.get("campuses") or [])}
+
+
+def _cov_sacramento(cov: Any, rows: int) -> dict[str, Any]:
+    cov = cov or {}
+    return {"collected": cov.get("collected", rows),
+            "reported": cov.get("reported_by_layer"),
+            "complete": cov.get("complete"),
+            "failures": len(cov.get("failures") or [])}
+
+
+def _cov_lpa(cov: Any, rows: int) -> dict[str, Any]:
+    cov = cov or {}
+    return {"collected": rows, "reported": None, "complete": None,
+            "failures": len(cov.get("failures") or []),
+            "note": (f"{cov.get('suppliers_with_vehicles')} of "
+                     f"{cov.get('suppliers_checked')} suppliers hold a vehicle"
+                     if cov.get("suppliers_checked") else None)}
+
+
+def _cov_suppliers(cov: Any, rows: int) -> dict[str, Any]:
+    cov = cov or {}
+    return {"collected": cov.get("suppliers_indexed", rows),
+            "reported": cov.get("names_searched"),
+            # Names searched is our own input, not something the portal claims exists,
+            # so the difference is a hit rate rather than a shortfall. Calling it a
+            # shortfall would report the registry as incomplete every single run.
+            "reported_is_portal_total": False,
+            "complete": None,
+            "failures": len(cov.get("failures") or []),
+            "note": ("denominator is names we searched; the registry indexes certified "
+                     "suppliers only, so a miss is usually 'not certified'")}
+
+
+def _cov_cslb(cov: Any, rows: int) -> dict[str, Any]:
+    files = (cov or {}).get("files") or []
+    if not files:
+        return {"collected": None, "reported": None, "complete": None}
+    best = max(files, key=lambda f: f.get("rows") or 0)
+    return {"collected": best.get("rows"), "reported": None,
+            "complete": best.get("complete"),
+            "note": best.get("reason") or best.get("transfer_error")}
+
+
+def _last_sync(paths: list[pathlib.Path]) -> str | None:
+    """Most recent successful write among a source's caches."""
+    stamps = [p.stat().st_mtime for p in paths if p.exists()]
+    if not stamps:
+        return None
+    return dt.datetime.fromtimestamp(max(stamps), dt.UTC).isoformat(timespec="seconds")
+
+
+def _count_rows(path: pathlib.Path) -> int:
+    if not path.exists():
+        return 0
+    if path.suffix == ".jsonl":
+        return sum(1 for line in path.open() if line.strip())
+    if path.suffix == ".csv":
+        with path.open(errors="replace") as handle:
+            return max(sum(1 for line in handle) - 1, 0)   # less the header
+    try:
+        payload = json.loads(path.read_text())
+    except Exception:
+        return 0
+    return len(payload) if hasattr(payload, "__len__") else 0
+
+
+def unified_coverage(outdir: pathlib.Path,
+                     registry_csv: str = "sources/source_registry.csv") -> dict[str, Any]:
+    """One reconciled account of what the pipeline actually holds.
+
+    Joins the static research in `source_registry.csv` -- portal, record type, historical
+    depth, known gaps -- to what each harvester reported on its last run, and to when
+    that run last wrote anything.
+    """
+    static: dict[str, dict[str, str]] = {}
+    registry = pathlib.Path(registry_csv)
+    if registry.exists():
+        with registry.open(encoding="utf-8") as handle:
+            static = {row["source_key"]: row for row in csv.DictReader(handle)}
+
+    entries = []
+    for source in COVERAGE_SOURCES:
+        meta = static.get(source.source_key, {})
+        cov = None
+        if source.coverage_file:
+            path = outdir / source.coverage_file
+            if path.exists():
+                try:
+                    cov = json.loads(path.read_text())
+                except Exception:
+                    cov = None
+        caches = [outdir / c for c in source.caches]
+        rows = sum(_count_rows(c) for c in caches)
+        # "Has this ever run?" is answered by evidence of a run -- a cache file or a
+        # coverage report -- not by a row count. A harvest that legitimately found
+        # nothing writes an empty cache, and reporting that as "never harvested" would
+        # hide a working source behind the same label as one nobody has wired up.
+        ran = cov is not None or any(c.exists() for c in caches)
+        detail = globals()[source.reader](cov, rows)
+        collected = detail.get("collected")
+        reported = detail.get("reported")
+        entries.append({
+            "source_key": source.source_key,
+            "jurisdiction": meta.get("jurisdiction"),
+            "portal": meta.get("portal"),
+            "agency_coverage": meta.get("agency_coverage"),
+            "record_type": meta.get("data_type"),
+            "historical_depth": meta.get("historical_depth"),
+            "last_sync": _last_sync(caches),
+            "harvested": ran,
+            "rows_on_disk": rows,
+            "collected": collected,
+            "reported_by_portal": reported,
+            # None means the portal states no total, so completeness is unknowable
+            # rather than false. Those are different answers and must stay so.
+            "complete": detail.get("complete"),
+            "reported_is_portal_total": detail.get("reported_is_portal_total", True),
+            "shortfall": (reported - collected
+                          if detail.get("reported_is_portal_total", True)
+                          and isinstance(reported, int) and isinstance(collected, int)
+                          and reported > collected else None),
+            "failures": detail.get("failures", 0),
+            "absent": detail.get("absent"),
+            "known_gap": meta.get("known_gaps"),
+            "note": detail.get("note"),
+        })
+
+    never = [e["source_key"] for e in entries if not e["harvested"]]
+    short = [e["source_key"] for e in entries if e["shortfall"]]
+    return {
+        "generated_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+        "sources": entries,
+        "sources_tracked": len(entries),
+        "sources_harvested": sum(1 for e in entries if e["harvested"]),
+        "sources_never_harvested": never,
+        "sources_short_of_portal_total": short,
+        "total_failures": sum(e["failures"] or 0 for e in entries),
     }

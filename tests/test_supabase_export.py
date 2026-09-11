@@ -198,9 +198,6 @@ class MapperTests(unittest.TestCase):
                           report["contract_status"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class BidderRankTests(unittest.TestCase):
     def test_an_observed_bidder_keeps_its_rank_and_names_its_own_source(self) -> None:
@@ -359,3 +356,51 @@ class ReferentialIntegrityTests(unittest.TestCase):
 
         payload = se.partner_match_rows([{"opportunity": target, "prime_candidates": []}])[0]
         self.assertIn(payload["record_id"], emitted)
+
+class DerivedRankAndPlatformIdTests(unittest.TestCase):
+    """Fields a newer source carries that the export was quietly dropping."""
+
+    STATED = {"business_unit": "2660", "event_id": "08A3933", "rank": 1,
+              "vendor_name_raw": "Ware Disposal Inc.", "amount_numeric": 436020.0,
+              "source_key": "caltrans_bid_results"}
+    DERIVED = {"business_unit": "PB14424", "event_id": "122502", "rank": None,
+               "derived_rank": 1, "vendor_name_raw": "SS+K Construction Inc.",
+               "amount_numeric": 3916068.0, "vendor_id": 1057345,
+               "source_key": "planetbids_agency_portal"}
+
+    def test_a_derived_rank_is_exported_rather_than_dropped(self) -> None:
+        # PlanetBids publishes amounts and leaves ranking at 0, so the low bidder is
+        # knowable. Exporting rank as null threw that away on 353 of 521 rows.
+        row = se.participant_rows([self.DERIVED], [])[0]
+        self.assertEqual(row["rank"], 1)
+
+    def test_a_derived_rank_is_labelled_as_derived(self) -> None:
+        row = se.participant_rows([self.DERIVED], [])[0]
+        self.assertEqual(row["rank_basis"], "derived_from_amount")
+
+    def test_a_stated_rank_is_labelled_as_stated(self) -> None:
+        row = se.participant_rows([self.STATED], [])[0]
+        self.assertEqual(row["rank"], 1)
+        self.assertEqual(row["rank_basis"], "stated")
+
+    def test_a_row_with_neither_has_no_rank_and_no_basis(self) -> None:
+        bare = {**self.DERIVED, "rank": None, "derived_rank": None}
+        row = se.participant_rows([bare], [])[0]
+        self.assertIsNone(row["rank"])
+        self.assertIsNone(row["rank_basis"])
+
+    def test_a_platform_vendor_id_is_namespaced_by_its_source(self) -> None:
+        # It deduplicates a vendor across that platform's agencies and does NOT cross
+        # into SCPRS supplier_id, so it must never sit in a field implying it does.
+        row = se.participant_rows([self.DERIVED], [])[0]
+        self.assertEqual(row["evidence"]["platform_vendor_id"],
+                         {"planetbids_agency_portal": 1057345})
+        self.assertNotEqual(row["competitor_id"], 1057345)
+
+    def test_a_source_without_a_platform_id_carries_none(self) -> None:
+        row = se.participant_rows([self.STATED], [])[0]
+        self.assertIsNone(row["evidence"]["platform_vendor_id"])
+
+
+if __name__ == "__main__":
+    unittest.main()
