@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 from .caleprocure import CalEProcureSession, COMP, _text
 
@@ -145,60 +145,112 @@ def _s(value: dt.date) -> str:
     return value.strftime("%m/%d/%Y")
 
 
+def observed_acq_methods(rows: Iterable[dict[str, Any]]) -> list[str]:
+    """Acquisition methods seen in already-collected rows, for use as a subdivision axis.
+
+    `acq_method` is the only field that is both a result column and a search criterion, so
+    it is the one axis whose values can be read back out of the data and fed straight in.
+    The list is a lower bound read off whatever has been collected, which is exactly why
+    the caller measures coverage afterwards instead of trusting it.
+    """
+    return sorted({(row.get("acq_method") or "").strip()
+                   for row in rows} - {""})
+
+
+def observed_business_units(events: Iterable[dict[str, Any]]) -> list[str]:
+    """Business-unit CODES seen in the Cal eProcure event feed, as a subdivision axis.
+
+    SCPRS takes the code ("0820"), not the display name, and its result rows carry only
+    the name -- so unlike `acq_method` this axis cannot be read back out of award rows.
+    The event feed is where the codes live.
+    """
+    return sorted({(e.get("business_unit") or "").strip()
+                   for e in events} - {""})
+
+
 def search_date_sliced(
     session: CalEProcureSession, from_date: str, to_date: str,
-    *, max_depth: int = 8, subdivide_by: tuple[str, list[str]] | None = None,
+    *, max_depth: int = 8,
+    subdivide_by: tuple[str, list[str]] | list[tuple[str, list[str]]] | None = None,
     **criteria: str,
 ) -> Iterator[dict[str, Any]]:
     """Bisect a date range until each slice fits under the grid's 200-row cap.
 
     The grid's NEXT control does not advance under automation, so slicing is the only way
-    to walk a large result set. A slice that is still truncated at `max_depth`, or one
-    narrowed to a single day and still truncated, is yielded with `truncated` set so the
-    shortfall is visible rather than silently dropped.
+    to walk a large result set. When a slice is down to a single day and still over the
+    cap, `subdivide_by` supplies further axes to cut it on, tried in order: a child that
+    is still capped after the first axis is cut again on the second, and so on.
+
+    Completeness is *measured*, not assumed. The portal reports a total per query, so
+    after subdividing we compare the rows the children returned against the total the
+    parent claimed. That verdict holds whether or not a value list is exhaustive, which
+    matters because none of the candidate axes has an enumerable vocabulary: the
+    reference window showed 26 categories, 29 acquisition methods and 93 departments, all
+    lower bounds read off an already-truncated sample.
     """
-    stack: list[tuple[dt.date, dt.date, int]] = [(_d(from_date), _d(to_date), 0)]
+    if subdivide_by is None:
+        axes: list[tuple[str, list[str]]] = []
+    elif isinstance(subdivide_by, tuple):
+        axes = [subdivide_by]
+    else:
+        axes = list(subdivide_by)
+    for field, _ in axes:
+        if field not in CRITERIA:
+            raise ValueError(f"unknown subdivide_by criterion: {field!r}")
+
+    # (start, end, depth, pinned criteria, index of the next axis to try)
+    stack: list[tuple[dt.date, dt.date, int, dict[str, str], int]] = [
+        (_d(from_date), _d(to_date), 0, {}, 0)]
     while stack:
-        start, end, depth = stack.pop()
-        result = search(session, from_date=_s(start), to_date=_s(end), **criteria)
-        result["slice"] = {"from": _s(start), "to": _s(end), "depth": depth}
+        start, end, depth, pinned, axis_i = stack.pop()
+        active = {**criteria, **pinned}
+        result = search(session, from_date=_s(start), to_date=_s(end), **active)
+        result["slice"] = {"from": _s(start), "to": _s(end), "depth": depth, **pinned}
         if not result["truncated"] or depth >= max_depth or start >= end:
-            if result["truncated"] and subdivide_by and start >= end:
-                # A single day above the cap cannot be bisected further, so subdivide on a
-                # second axis. Measured case: 09/02/2026 alone reports 239 rows.
-                field, values = subdivide_by
-                if field not in CRITERIA:
-                    raise ValueError(f"unknown subdivide_by criterion: {field!r}")
+            if result["truncated"] and axis_i < len(axes):
+                field, values = axes[axis_i]
                 covered = 0
                 for value in values:
+                    child_pinned = {**pinned, field: value}
                     sub = search(session, from_date=_s(start), to_date=_s(end),
-                                 **{**criteria, field: value})
-                    sub["slice"] = {"from": _s(start), "to": _s(end), "depth": depth,
-                                    field: value}
+                                 **{**criteria, **child_pinned})
+                    sub["slice"] = {"from": _s(start), "to": _s(end),
+                                    "depth": depth, **child_pinned}
                     covered += len(sub["rows"])
+                    if sub["truncated"] and axis_i + 1 < len(axes):
+                        # Still capped pinned to this value. Push it back to be cut on
+                        # the next axis rather than written off -- writing it off is how
+                        # rows go missing without anything saying so.
+                        stack.append((start, end, depth, child_pinned, axis_i + 1))
+                        continue
                     if sub["truncated"]:
                         sub["shortfall_note"] = (
                             f"{field}={value!r} on {_s(start)} still reports "
-                            f"{sub['total_reported']} rows above the {PAGE_LIMIT} cap")
+                            f"{sub['total_reported']} rows above the {PAGE_LIMIT} cap, "
+                            "and no further axis was supplied")
                     yield sub
-                # The parent slice is reported too, marked so its rows are not double
-                # counted, because the subdivision list may not cover every value present.
+                reported = int(result["total_reported"] or 0)
                 result["subdivided"] = True
                 result["subdivision_field"] = field
                 result["subdivision_rows_seen"] = covered
+                result["subdivision_complete"] = covered >= reported
+                result["subdivision_shortfall"] = max(reported - covered, 0)
                 result["shortfall_note"] = (
-                    f"{_s(start)} reports {result['total_reported']} rows; subdivided by "
-                    f"{field} across {len(values)} values yielding {covered} rows. "
-                    "Coverage is only complete if the value list is exhaustive.")
+                    f"{_s(start)} reports {reported} rows; subdividing by {field} across "
+                    f"{len(values)} values returned {covered}. "
+                    + ("Every reported row is accounted for."
+                       if covered >= reported else
+                       f"{reported - covered} row(s) are still unaccounted for."))
                 yield result
                 continue
             if result["truncated"]:
                 result["shortfall_note"] = (
                     f"slice {_s(start)}..{_s(end)} still reports "
                     f"{result['total_reported']} rows above the {PAGE_LIMIT} cap "
-                    f"at depth {depth}; pass subdivide_by to go further")
+                    f"at depth {depth}"
+                    + ("" if axes else "; pass subdivide_by to go further"))
             yield result
             continue
         middle = start + (end - start) / 2
-        stack.append((middle + dt.timedelta(days=1), end, depth + 1))
-        stack.append((start, middle, depth + 1))
+        stack.append((middle + dt.timedelta(days=1), end, depth + 1, pinned, axis_i))
+        stack.append((start, middle, depth + 1, pinned, axis_i))

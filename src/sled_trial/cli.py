@@ -519,7 +519,25 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     else:
         window_from = args.awards_from or assemble.default_awards_from(cutoff)
         slices = []
-        for result in scprs.search_date_sliced(session, window_from, cutoff):
+        # Subdivide a still-capped day by acquisition method. The value list is a lower
+        # bound read off whatever is already cached, so the sweep measures what the
+        # subdivision actually recovered rather than assuming the list is exhaustive.
+        # Two axes, tried in order. Acquisition method first because it comes free from
+        # rows already collected; business unit second because one method dominates --
+        # `Fair and Reasonable - COMPETITIVE` was over the cap on every day of the
+        # reference window even pinned, so a single axis cannot finish. Both lists are
+        # lower bounds, which is why the sweep measures what it recovered.
+        axes = []
+        cached = assemble._read_jsonl(outdir / "awards.jsonl")
+        if cached:
+            methods = scprs.observed_acq_methods(cached)
+            if methods:
+                axes.append(("acq_method", methods))
+        units = scprs.observed_business_units(assemble._read_jsonl(outdir / "events.jsonl"))
+        if units:
+            axes.append(("business_unit", units))
+        for result in scprs.search_date_sliced(
+                session, window_from, cutoff, subdivide_by=axes or None):
             # A subdivided parent slice is yielded for its shortfall note and carries the
             # same rows its children already yielded. Taking them again double-counts.
             if result.get("subdivided"):

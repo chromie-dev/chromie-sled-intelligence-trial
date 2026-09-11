@@ -158,14 +158,28 @@ cost a day to find and is the single most useful thing in this document.
 ### Response Bid Inquiry (respondent fields)
 
 - Endpoint we call: `https://caleprocure.ca.gov/psc/psfpd1/SUPPLIER/ERP/c/AUC_MANAGE_BIDS.AUC_RESP_INQ_AUC.GBL?page=AUC_RESP_INQ_AUC`
-- Provides: responses/bidders
-- Access: manual-only
-- Login required: YES - 302 to ?cmd=login&errorPg=ckreq
-- When it becomes public: not publicly disclosed anonymously
-- History available: unknown
-- Stable identifiers: unknown
-- Verified: 2026-09-07
-- **Gaps and caveats:** Cal eProcure does not publicly disclose bidder identities here. That is a fact about this portal, not about California: caltrans_bid_results publishes the full ranked field, losers included, for business unit 2660. Fallbacks elsewhere are bid-tabulation and intent-to-award PDFs posted as event attachments, then SCPRS awardees, then expenditure-derived participation.
+- Provides: solicitations (NOT respondents - see below)
+- Access: HTML (bare .GBL and `?page=` form; both public)
+- Login required: no - and signing in is actively worse
+- History available: same active-only window as the main feed
+- Verified: 2026-09-10, with a registered supplier login
+- **The answer to the brief's central question, now tested rather than inferred.**
+  Cal eProcure does not disclose other bidders' identities here, authenticated or not:
+  - As a guest the grid columns are Department / Event ID / Event Name / Format / Type /
+    End Date / Status / Buyer Name / Buyer Email. No respondent column, and no respondent
+    field id anywhere in the page. It returns 356 events against the 375 the `.GBL` feed
+    already gives, with the same field set - so it adds nothing the pipeline lacks.
+  - Signed in as a registered supplier the landing page is unchanged.
+  - Signing in **breaks** the event detail the pipeline depends on. That URL carries
+    `BIDDER_ID=BID0000001`, the generic Default Bidder, and an authenticated session is
+    rejected with `Invalid User Information BID0000001/B`. Dropping the bidder parameters
+    yields PeopleSoft's component search dialog rather than the event.
+  This is PeopleSoft Strategic Sourcing working as intended - a bidder inquires about its
+  own responses, not anyone else's - so **the pipeline should stay anonymous**, and the
+  earlier 302-to-login was not reproduced.
+- **Where bidder identities actually come from:** `caltrans_bid_results` publishes the
+  full ranked field, losers included, for business unit 2660; then bid-tabulation and
+  intent-to-award PDFs posted as event attachments; then SCPRS awardees.
 
 ### Purchase Order Data (DGS) - historical inference corpus
 

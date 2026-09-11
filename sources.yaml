@@ -68,17 +68,17 @@ sources:
       ONLY CA source tying a named company to a specific solicitation. But: contact is a person, no supplier_id, company name only in free text -> fuzzy match to SCPRS. Generic bid-assistance ads recur across unrelated events and must be discounted
 
   - id: caleprocure_response_bid_inquiry
-    mode: dead_end
+    mode: live
     jurisdiction: California (state)
     portal: Cal eProcure
     name: Response Bid Inquiry (respondent fields)
     provides: responses/bidders
     access_method: manual-only
-    auth_required: YES - 302 to ?cmd=login&errorPg=ckreq
+    auth_required: no - and signing in is actively worse, see known_gaps
     official_url: https://caleprocure.ca.gov/psc/psfpd1/SUPPLIER/ERP/c/AUC_MANAGE_BIDS.AUC_RESP_INQ_AUC.GBL?page=AUC_RESP_INQ_AUC
     verified_on: 2026-09-07
     known_gaps: >-
-      This is the answer to the brief's central question: California does not publicly disclose bidder identities here. Fallback is bid-tabulation and intent-to-award PDFs posted as event attachments, then SCPRS awardees, then expenditure-derived participation.
+      Still the answer to the brief's central question, but now tested rather than inferred: signed in as a registered supplier on 2026-09-10, no respondent column and no respondent field ids appear. Signing in also breaks the event detail, which carries BIDDER_ID=BID0000001 and rejects a real session with 'Invalid User Information' - so the pipeline stays anonymous. Fallback is unchanged: bid-tabulation and intent-to-award PDFs, then SCPRS awardees, then agency bid-results pages.
 
   - id: caleprocure_scprs
     mode: live

@@ -125,3 +125,140 @@ class GridAnchorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubdivisionCoverageTests(unittest.TestCase):
+    """A capped slice must report how much it recovered, not assume it got everything.
+
+    The grid caps at 200 and will not page, so a day above the cap is subdivided on a
+    second axis. None of the candidate axes has an enumerable vocabulary -- the reference
+    window showed 26 categories, 29 acquisition methods and 93 departments, all lower
+    bounds read off an already-truncated sample. So completeness is arithmetic: compare
+    what the children returned against the total the portal claimed for the parent.
+    """
+
+    def _fake_search(self, plan):
+        """Replace the network. `plan` maps a criterion value to (rows, total_reported)."""
+        def search(session, **criteria):
+            key = criteria.get("acq_method")
+            rows, total = plan[key]
+            return {"criteria": dict(criteria), "rows": [{"n": i} for i in range(rows)],
+                    "pager": (1, rows, total), "total_reported": total,
+                    "truncated": total > rows, "no_results": False}
+        return search
+
+    def _run(self, plan, values):
+        original = scprs.search
+        scprs.search = self._fake_search(plan)
+        try:
+            return list(scprs.search_date_sliced(
+                None, "09/02/2026", "09/02/2026",
+                subdivide_by=("acq_method", values)))
+        finally:
+            scprs.search = original
+
+    def test_a_fully_accounted_day_is_reported_complete(self) -> None:
+        out = self._run({None: (200, 239), "A": (139, 139), "B": (100, 100)}, ["A", "B"])
+        parent = next(r for r in out if r.get("subdivided"))
+        self.assertEqual(parent["subdivision_rows_seen"], 239)
+        self.assertTrue(parent["subdivision_complete"])
+        self.assertEqual(parent["subdivision_shortfall"], 0)
+
+    def test_an_incomplete_value_list_reports_the_exact_shortfall(self) -> None:
+        # The failure this guards: a value list that misses a method silently drops its
+        # rows, and the sweep reads as complete because every child came back under cap.
+        out = self._run({None: (200, 239), "A": (139, 139)}, ["A"])
+        parent = next(r for r in out if r.get("subdivided"))
+        self.assertFalse(parent["subdivision_complete"])
+        self.assertEqual(parent["subdivision_shortfall"], 100)
+        self.assertIn("unaccounted", parent["shortfall_note"])
+
+    def test_a_child_still_over_the_cap_is_flagged_rather_than_written_off(self) -> None:
+        out = self._run({None: (200, 500), "A": (200, 460), "B": (40, 40)}, ["A", "B"])
+        child = next(r for r in out if r["slice"].get("acq_method") == "A")
+        self.assertTrue(child["truncated"])
+        self.assertIn("above the", child["shortfall_note"])
+
+    def test_the_parent_is_marked_so_its_rows_are_not_counted_twice(self) -> None:
+        out = self._run({None: (200, 239), "A": (139, 139), "B": (100, 100)}, ["A", "B"])
+        parents = [r for r in out if r.get("subdivided")]
+        self.assertEqual(len(parents), 1)
+        self.assertEqual(sum(len(r["rows"]) for r in out if not r.get("subdivided")), 239)
+
+    def test_a_slice_under_the_cap_is_never_subdivided(self) -> None:
+        out = self._run({None: (12, 12)}, ["A", "B"])
+        self.assertEqual(len(out), 1)
+        self.assertNotIn("subdivided", out[0])
+
+
+class AcqMethodAxisTests(unittest.TestCase):
+    def test_the_axis_is_read_out_of_collected_rows(self) -> None:
+        rows = [{"acq_method": "Informal - COMPETITIVE"}, {"acq_method": "Statewide Contracts"},
+                {"acq_method": "Informal - COMPETITIVE"}, {"acq_method": ""}, {}]
+        self.assertEqual(scprs.observed_acq_methods(rows),
+                         ["Informal - COMPETITIVE", "Statewide Contracts"])
+
+    def test_it_is_the_one_field_that_is_both_a_column_and_a_criterion(self) -> None:
+        # category maps to a comment field, not to acq_type, so it cannot be fed back in.
+        self.assertIn("acq_method", scprs.CRITERIA)
+        self.assertIn("acq_method", scprs.FIELDS)
+        self.assertNotIn("category", scprs.CRITERIA)
+
+
+class SecondAxisTests(unittest.TestCase):
+    """One acquisition method dominates, so a single axis cannot finish the job.
+
+    Measured: `Fair and Reasonable - COMPETITIVE` alone reported 366-475 rows on every
+    day of the reference window, so pinning it still leaves the slice over the cap. A
+    child like that has to be cut again, not written off.
+    """
+
+    def _run(self, plan, axes):
+        def search(session, **criteria):
+            key = (criteria.get("acq_method"), criteria.get("business_unit"))
+            rows, total = plan[key]
+            return {"criteria": dict(criteria), "rows": [{"n": i} for i in range(rows)],
+                    "pager": (1, rows, total), "total_reported": total,
+                    "truncated": total > rows, "no_results": False}
+        original = scprs.search
+        scprs.search = search
+        try:
+            return list(scprs.search_date_sliced(
+                None, "09/02/2026", "09/02/2026", subdivide_by=axes))
+        finally:
+            scprs.search = original
+
+    def test_a_child_still_capped_is_cut_on_the_next_axis(self) -> None:
+        plan = {
+            (None, None): (200, 400),          # the day, over cap
+            ("FAIR", None): (200, 300),        # pinned to the method, still over cap
+            ("OTHER", None): (100, 100),       # this one fits
+            ("FAIR", "2660"): (180, 180),      # cut again by business unit
+            ("FAIR", "7760"): (120, 120),
+        }
+        out = self._run(plan, [("acq_method", ["FAIR", "OTHER"]),
+                               ("business_unit", ["2660", "7760"])])
+        leaves = [r for r in out if not r.get("subdivided")]
+        pinned_both = [r["slice"] for r in leaves if "business_unit" in r["slice"]]
+        self.assertEqual(len(pinned_both), 2)
+        self.assertEqual(sum(len(r["rows"]) for r in leaves), 100 + 180 + 120)
+        self.assertFalse(any(r["truncated"] for r in leaves))
+
+    def test_a_single_axis_still_works_as_a_bare_tuple(self) -> None:
+        plan = {(None, None): (200, 239), ("A", None): (139, 139), ("B", None): (100, 100)}
+        out = self._run(plan, ("acq_method", ["A", "B"]))
+        self.assertTrue(next(r for r in out if r.get("subdivided"))["subdivision_complete"])
+
+    def test_an_unknown_axis_is_rejected_before_any_request(self) -> None:
+        with self.assertRaises(ValueError):
+            list(scprs.search_date_sliced(None, "09/02/2026", "09/02/2026",
+                                          subdivide_by=[("nonsense", ["x"])]))
+
+
+class BusinessUnitAxisTests(unittest.TestCase):
+    def test_codes_come_from_the_event_feed_not_from_award_rows(self) -> None:
+        # SCPRS wants the code; its result rows carry only the display name, so this axis
+        # cannot be read back out of awards the way acq_method can.
+        events = [{"business_unit": "2660"}, {"business_unit": "7760"},
+                  {"business_unit": "2660"}, {"business_unit": ""}, {}]
+        self.assertEqual(scprs.observed_business_units(events), ["2660", "7760"])
