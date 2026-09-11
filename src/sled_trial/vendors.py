@@ -581,3 +581,56 @@ def resolve_bidder_identities(rows: list[dict[str, Any]],
         "unresolved": counts["unresolved"],
         "awards_seen": awards_seen,
     }
+
+
+def attach_vehicles(profiles: list[dict[str, Any]],
+                    vehicles: list[dict[str, Any]]) -> dict[str, Any]:
+    """Attach statewide-contract standing to each profile in place. Returns a summary.
+
+    `vehicles` is `lpa.vehicle_rows` output, keyed by `supplier_id`. Unlike the location
+    join this is an identifier join, not a name one, because the LPA search publishes the
+    same supplier id the award registry uses -- so there is no confidence ceiling and no
+    ambiguity case to handle.
+
+    This is the evidence behind the "presence on a statewide contract or purchasing
+    vehicle" prediction feature, which has scored zero in every run to date because
+    nothing supplied it.
+    """
+    by_supplier: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
+    for row in vehicles or []:
+        sid = (row.get("supplier_id") or "").strip()
+        if sid:
+            by_supplier[sid].append(row)
+
+    matched = current = 0
+    for profile in profiles:
+        held = by_supplier.get((profile.get("supplier_id") or "").strip())
+        if not held:
+            profile["vehicles"] = {
+                "matched": False,
+                "held": [],
+                # Absent from the register is a real answer here, unlike the supplier
+                # registry: every statewide vehicle is listed, so "no vehicle" means the
+                # vendor holds none rather than that it is uncatalogued.
+                "note": "holds no statewide contract or purchasing vehicle",
+            }
+            continue
+        matched += 1
+        live = [v for v in held if v.get("current") is True]
+        if live:
+            current += 1
+        profile["vehicles"] = {
+            "matched": True,
+            "evidence_class": "observed",
+            "identity_basis": "supplier_id",
+            "held": held,
+            "current_count": len(live),
+            # Holding a vehicle means a department may buy without re-competing, not
+            # that anyone has. Kept distinct from award history for that reason.
+            "note": ("holds {} vehicle(s), {} currently in force. A vehicle is standing "
+                     "to be bought from, not evidence of a purchase."
+                     ).format(len(held), len(live)),
+        }
+    return {"profiles": len(profiles), "matched": matched,
+            "with_current_vehicle": current,
+            "identity_basis": "supplier_id (identifier join, not name)"}

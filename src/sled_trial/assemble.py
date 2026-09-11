@@ -63,6 +63,7 @@ ENRICHMENTS = (
     # Every declared bidder cache at once. Naming one filename here meant a second
     # jurisdiction's bidders never reached the win-rate join.
     (BIDDER_ROWS, None, "attach_bid_history"),
+    ("lpa_vehicles.json", None, "attach_vehicles"),
 )
 
 

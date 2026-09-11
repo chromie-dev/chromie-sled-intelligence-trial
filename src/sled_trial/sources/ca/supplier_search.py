@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
-from typing import Any
+from typing import Any, Iterable
 
 from .caleprocure import COMP, CalEProcureSession, _text, hidden_fields
 
@@ -153,3 +153,35 @@ def search(session: CalEProcureSession, **criteria: str) -> dict[str, Any]:
         "count": len(rows),
         "no_results": not rows,
     }
+
+
+def location_index(session: CalEProcureSession, names: "Iterable[str]",
+                   *, on_progress: Any = None) -> dict[str, Any]:
+    """Look each vendor name up and build the name-keyed index the profiles read.
+
+    This exists because the index was previously produced by hand: `supplier_locations.json`
+    sat in the build directory with nothing in the repository able to regenerate it, which
+    is the same reproducibility hole as a headline metric no command can rebuild.
+
+    A lookup that fails is recorded. "Not in the registry" and "we could not ask" are
+    different answers, and the registry only indexes certified suppliers anyway, so the
+    first is already a weak signal and must not absorb the second.
+    """
+    say = on_progress or (lambda _m: None)
+    wanted = [n for n in dict.fromkeys((n or "").strip() for n in names) if n]
+    index: dict[str, Any] = {}
+    failures: list[dict[str, str]] = []
+    for n, name in enumerate(wanted, start=1):
+        try:
+            rows = search(session, name=name)["rows"]
+        except Exception as exc:
+            failures.append({"name": name, "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        for row in rows:
+            index.setdefault(row["supplier_name"], row)
+        if n % 25 == 0:
+            say(f"{n}/{len(wanted)} names searched, {len(index)} suppliers indexed")
+    say(f"{len(index)} suppliers indexed from {len(wanted)} names; "
+        f"{len(failures)} lookups failed")
+    return {"index": index, "names_searched": len(wanted),
+            "suppliers_indexed": len(index), "failures": failures}

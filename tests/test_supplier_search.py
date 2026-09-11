@@ -124,5 +124,58 @@ class LocationJoinTests(unittest.TestCase):
         self.assertIn("city-to-county mapping", summary["prediction_gap"])
 
 
+
+class LocationIndexTests(unittest.TestCase):
+    """The index the vendor profiles read had no producer in the repository."""
+
+    class FakeSession:
+        def __init__(self, pages, fail_for=None):
+            self.pages, self.fail_for, self.asked = pages, fail_for or set(), []
+
+        def get(self, url, referer=None, timeout=120):
+            return b"<html></html>", {}
+
+        def post_raw(self, url, body, referer=None, timeout=180):
+            import urllib.parse
+            name = urllib.parse.parse_qs(body.decode()).get(
+                "ZZ_PUBSRCH1_WRK_NAME1", [""])[0]
+            self.asked.append(name)
+            if name in self.fail_for:
+                raise OSError("connection reset")
+            return self.pages.get(name, "").encode(), {}
+
+    def _page(self, name, city):
+        return (f"<span id='ZZ_PUBSRCH_VW_ZZ_NAME1$0'>{name}</span>"
+                f"<span id='ZZ_PUBSRCH_VW_CITY$0'>{city}</span>"
+                f"<span id='ZZ_PUBSRCH_VW_POSTAL$0'>95401</span>")
+
+    def test_the_index_is_keyed_by_supplier_name(self) -> None:
+        session = self.FakeSession({"ACME": self._page("ACME INC", "SANTA ROSA")})
+        out = ss.location_index(session, ["ACME"])
+        self.assertIn("ACME INC", out["index"])
+        self.assertTrue(out["index"]["ACME INC"]["has_location"])
+
+    def test_each_name_is_searched_once(self) -> None:
+        session = self.FakeSession({"ACME": self._page("ACME INC", "SANTA ROSA")})
+        ss.location_index(session, ["ACME", "ACME", " ACME "])
+        self.assertEqual(session.asked, ["ACME"])
+
+    def test_a_failed_lookup_is_recorded_not_read_as_unregistered(self) -> None:
+        # The registry only indexes certified suppliers, so absence is already a weak
+        # signal; letting a network failure land in the same bucket would weaken it more.
+        session = self.FakeSession({}, fail_for={"BOOM"})
+        out = ss.location_index(session, ["BOOM"])
+        self.assertEqual(out["index"], {})
+        self.assertEqual(len(out["failures"]), 1)
+        self.assertIn("OSError", out["failures"][0]["error"])
+
+    def test_blank_names_are_skipped_rather_than_searched(self) -> None:
+        # A blank search returns the empty form, which parses as zero results and looks
+        # exactly like "this vendor is not registered".
+        session = self.FakeSession({})
+        out = ss.location_index(session, ["", None, "   "])
+        self.assertEqual(session.asked, [])
+        self.assertEqual(out["names_searched"], 0)
+
 if __name__ == "__main__":
     unittest.main()

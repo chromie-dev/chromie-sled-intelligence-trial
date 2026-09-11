@@ -448,6 +448,70 @@ def cmd_limits(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_suppliers(args: argparse.Namespace) -> int:
+    """Build the supplier location/certification index the vendor profiles read.
+
+    Regenerates `supplier_locations.json`, which previously existed in the build
+    directory with nothing able to rebuild it.
+    """
+    from .sources.ca import supplier_search
+
+    outdir = pathlib.Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    awards = assemble._read_jsonl(outdir / "awards.jsonl")
+    names = [r.get("supplier_name") for r in awards]
+    if args.limit:
+        names = names[:args.limit]
+    if not names:
+        print("  no supplier names in awards.jsonl; run the award sweep first")
+        return 1
+
+    session = _session(args)
+    out = supplier_search.location_index(
+        session, names, on_progress=lambda m: print(f"        {m}"))
+    (outdir / "supplier_locations.json").write_text(
+        json.dumps(out["index"], indent=1, default=str))
+    (outdir / "supplier_locations_coverage.json").write_text(json.dumps(
+        {k: v for k, v in out.items() if k != "index"}, indent=1, default=str))
+    with_loc = sum(1 for v in out["index"].values() if v.get("has_location"))
+    print(f"\n{out['suppliers_indexed']} suppliers indexed ({with_loc} with a location) "
+          f"from {out['names_searched']} names; {len(out['failures'])} lookups failed")
+    return 0
+
+
+def cmd_lpa(args: argparse.Namespace) -> int:
+    """Look up the statewide contract vehicles held by suppliers in the award corpus.
+
+    Keyed by supplier id, which is what the LPA search publishes and what the award rows
+    already carry, so this joins on an identifier rather than a name.
+    """
+    from .sources.ca import lpa
+
+    outdir = pathlib.Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    awards = assemble._read_jsonl(outdir / "awards.jsonl")
+    supplier_ids = [s for s in dict.fromkeys(
+        (r.get("supplier_id") or "").strip() for r in awards) if s]
+    if args.limit:
+        supplier_ids = supplier_ids[:args.limit]
+    if not supplier_ids:
+        print("  no supplier ids in awards.jsonl; run the award sweep first")
+        return 1
+    print(f"  checking {len(supplier_ids)} suppliers for statewide vehicles")
+
+    session = _session(args)
+    out = lpa.vehicles_by_supplier(session, supplier_ids,
+                                   on_progress=lambda m: print(f"        {m}"))
+    rows = lpa.vehicle_rows(out["by_supplier"])
+    (outdir / "lpa_vehicles.json").write_text(json.dumps(rows, indent=1, default=str))
+    (outdir / "lpa_coverage.json").write_text(json.dumps(
+        {k: v for k, v in out.items() if k != "by_supplier"}, indent=1, default=str))
+    live = sum(1 for r in rows if r["current"] is True)
+    print(f"\n{len(rows)} vehicles across {out['suppliers_with_vehicles']} suppliers "
+          f"({live} currently in force); {len(out['failures'])} lookups failed")
+    return 0
+
+
 def cmd_planetbids(args: argparse.Namespace) -> int:
     """Harvest PlanetBids agency portals: who bid, and who took out the documents.
 
@@ -802,6 +866,16 @@ def build_parser() -> argparse.ArgumentParser:
     tb.add_argument("--page", action="append",
                     help="page to discover PDFs from; repeatable, defaults to the "
                          "commission calendar")
+    su = sub.add_parser("suppliers", parents=[common],
+                        help="rebuild the supplier location/certification index")
+    su.add_argument("--limit", type=int, default=None,
+                    help="cap how many names are searched")
+
+    lp = sub.add_parser("lpa", parents=[common],
+                        help="statewide contract vehicles held by corpus suppliers")
+    lp.add_argument("--limit", type=int, default=None,
+                    help="cap how many suppliers are checked")
+
     pbx = sub.add_parser("planetbids", parents=[common],
                          help="harvest PlanetBids agency portals (names losing bidders)")
     pbx.add_argument("--agency", action="append",
@@ -836,7 +910,8 @@ def main(argv: list[str] | None = None) -> int:
             "spending": cmd_spending, "evaluate": cmd_evaluate,
             "backfill-primes": cmd_backfill_primes, "bidders": cmd_bidders,
             "tabulations": cmd_tabulations, "auth": cmd_auth, "limits": cmd_limits,
-            "planetbids": cmd_planetbids}[
+            "planetbids": cmd_planetbids,
+            "lpa": cmd_lpa, "suppliers": cmd_suppliers}[
         args.command](args)
 
 
