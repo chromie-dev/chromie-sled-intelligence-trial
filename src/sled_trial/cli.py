@@ -734,6 +734,185 @@ def cmd_planetbids(args: argparse.Namespace) -> int:
     return 0
 
 
+def month_windows(from_date: str, to_date: str) -> list[tuple[str, str]]:
+    """Split a range into calendar months, newest first.
+
+    Newest first because recency dominates the features: if a backfill is stopped
+    early, the months that were collected are the ones worth having. Calendar months
+    rather than 30-day blocks so a window is nameable -- "September is complete" is a
+    claim a reviewer can check against the portal.
+    """
+    import datetime as dt
+
+    start, end = dt.datetime.strptime(from_date, "%m/%d/%Y").date(), \
+        dt.datetime.strptime(to_date, "%m/%d/%Y").date()
+    if start > end:
+        raise ValueError(f"--from {from_date} is after --to {to_date}")
+    out, cursor = [], start
+    while cursor <= end:
+        last = (cursor.replace(day=28) + dt.timedelta(days=4)).replace(day=1) \
+            - dt.timedelta(days=1)
+        out.append((cursor.strftime("%m/%d/%Y"), min(last, end).strftime("%m/%d/%Y")))
+        cursor = last + dt.timedelta(days=1)
+    return list(reversed(out))
+
+
+def cmd_backfill_awards(args: argparse.Namespace) -> int:
+    """Deepen the award corpus a month at a time.
+
+    The sweep itself is `sweep_awards`, unchanged -- this walks calendar months and
+    calls it, which is what makes a long backfill stoppable. Twelve months serially
+    costs the same as one twelve-month range; what months buy is a corpus you can
+    describe. "The last five months, complete" is checkable against portal totals per
+    window, where a ragged partial year is not.
+
+    Slice keys carry no notion of which run produced them, so months never collide and
+    a re-run skips whatever is already held.
+    """
+    outdir = pathlib.Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    windows = month_windows(args.since, args.until)
+    if args.months:
+        windows = windows[:args.months]
+    print(f"backfilling {len(windows)} month(s), newest first: "
+          f"{windows[-1][0]} .. {windows[0][1]}")
+
+    session = _session(args)
+    log = outdir / "awards_backfill_coverage.jsonl"
+    done = 0
+    for index, (start, end) in enumerate(windows, 1):
+        print(f"\n  [{index}/{len(windows)}] {start} .. {end}")
+        try:
+            _, coverage = sweep_awards(session, outdir, start, end,
+                                       say=lambda m: print(f"        {m}"))
+        except KeyboardInterrupt:
+            # Everything up to here is on disk and recorded. Stopping is a supported
+            # way to run this, not a failure.
+            print(f"\n  stopped after {done} of {len(windows)} months; "
+                  f"rerun to continue from here")
+            return 0
+        except Exception as exc:
+            # One month failing must not cost the months after it. Its slices stay
+            # unheld, so a rerun re-asks exactly that window.
+            print(f"        FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+            continue
+        done += 1
+        # Appended, never overwritten: a per-window verdict is the only way to say
+        # which months are actually complete.
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"window": {"from": start, "to": end},
+                                 "collected": coverage.get("rows_collected"),
+                                 "reported": coverage.get("rows_reported_by_portal"),
+                                 "complete": coverage.get("complete"),
+                                 "slices": coverage.get("slices"),
+                                 "collected_at": documents.utc_now()},
+                                default=str) + "\n")
+    total = sum(1 for _ in (outdir / "awards.jsonl").open())
+    print(f"\n{done} of {len(windows)} month(s) swept; {total} award rows on disk "
+          f"(per-window verdicts in {log.name})")
+    return 0
+
+
+def sweep_awards(session, outdir: pathlib.Path, window_from: str, window_to: str,
+                 *, say=print) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Collect SCPRS awards over one date window, resumably.
+
+    Shared by `analyze`, which sweeps a single opportunity's context window, and
+    `backfill-awards`, which walks a month at a time. One implementation because the
+    hard parts -- subdivision, per-slice checkpointing, dedupe on read-back -- are
+    exactly the parts that must not diverge between the two.
+    """
+    from .sources.ca import scprs
+
+    cached = outdir / "awards.jsonl"
+    slices = []
+    # Subdivide a still-capped day by acquisition method. The value list is a lower
+    # bound read off whatever is already cached, so the sweep measures what the
+    # subdivision actually recovered rather than assuming the list is exhaustive.
+    # Two axes, tried in order. Acquisition method first because it comes free from
+    # rows already collected; business unit second because one method dominates --
+    # `Fair and Reasonable - COMPETITIVE` was over the cap on every day of the
+    # reference window even pinned, so a single axis cannot finish. Both lists are
+    # lower bounds, which is why the sweep measures what it recovered.
+    axes = []
+    # Named distinctly from `cached`, which is the output *path* set above. Reusing
+    # that name here clobbered it and the sweep died writing its own results -- on
+    # the full-sweep branch only, so every --reuse-awards run passed and every real
+    # one lost ninety minutes of throttled requests.
+    previous_awards = assemble._read_jsonl(outdir / "awards.jsonl")
+    if previous_awards:
+        methods = scprs.observed_acq_methods(previous_awards)
+        if methods:
+            axes.append(("acq_method", methods))
+    units = scprs.observed_business_units(assemble._read_jsonl(outdir / "events.jsonl"))
+    if units:
+        axes.append(("business_unit", units))
+    # Resume rather than restart. This sweep is the longest transaction in the
+    # pipeline and has lost about ninety minutes twice: once to memory pressure,
+    # once to a crash writing its own output. A slice that answered is not asked
+    # again; a slice that failed stays pending.
+    sweep_state = harvest_state.load(outdir)
+    done = {u for u, e in (sweep_state.get("sources", {})
+                           .get("caleprocure_scprs", {})
+                           .get("units", {})).items()
+            if e.get("outcome") in harvest_state.DONE}
+
+    def note_slice(key: str, outcome: str, rows: int) -> None:
+        harvest_state.record(sweep_state, "caleprocure_scprs", key,
+                             outcome=outcome, rows=rows)
+
+    for result in scprs.search_date_sliced(
+            session, window_from, window_to, subdivide_by=axes or None,
+            skip=done, on_slice=note_slice):
+        # A subdivided parent slice is yielded for its shortfall note and carries the
+        # same rows its children already yielded. Taking them again double-counts.
+        if result.get("subdivided"):
+            continue
+        # Checkpoint per slice. The save below only runs if the whole sweep
+        # finishes, so a run killed part-way -- the memory kill this resume was
+        # built for -- held nothing and refetched all of it. Rows before state:
+        # a crash between the two costs one refetch, whereas marking a slice
+        # done whose rows never reached disk would leave a hole nothing reports.
+        documents.write_jsonl(result["rows"], cached, append=True)
+        harvest_state.save(outdir, sweep_state)
+        # Keep the slice's tally, drop its rows. They are on disk a line above,
+        # and coverage only ever asks how many there were. Holding them here as
+        # well retained every row twice for the length of the sweep, which is
+        # what killed this run three times; twelve months would not have fit at
+        # all. Peak memory is now one slice, not the whole window.
+        slices.append({k: v for k, v in result.items() if k != "rows"}
+                      | {"rows_collected": len(result["rows"])})
+    harvest_state.save(outdir, sweep_state)
+    if done:
+        print(f"        resumed: {len(done)} slice(s) already held, "
+              f"{len(previous_awards)} cached rows carried")
+    coverage = assemble.award_sweep_coverage(slices)
+    coverage_path = outdir / "awards_coverage.json"
+    existing_coverage = (json.loads(coverage_path.read_text())
+                         if coverage_path.exists() else None)
+    if not coverage["complete"]:
+        print(f"        WARNING: {coverage['slices_truncated']} of "
+              f"{coverage['slices']} slices hit the grid cap; "
+              f"{coverage['rows_reported_by_portal'] - coverage['rows_collected']} "
+              f"reported rows not retrieved (see awards_coverage.json)")
+    # Read back what the sweep checkpointed instead of carrying it in memory: the
+    # file already holds this run's slices appended to whatever an earlier run left,
+    # so this is both the dedupe and the resume carry-over in one pass. Last wins,
+    # so a row fetched now replaces the cached copy of the same award.
+    # ponytail: reads the whole corpus once at the end. If the window ever outgrows
+    # memory at that point, stream it through a temp file keyed on award_key.
+    awards = list({assemble.award_key(r): r
+                   for r in assemble._read_jsonl(cached)}.values())
+    documents.write_jsonl(awards, cached)
+    # Written after the rows, and always -- a verdict is only worth publishing next
+    # to the corpus it describes.
+    coverage_path.write_text(json.dumps(assemble.award_coverage_verdict(
+        coverage, existing_coverage, rows_on_disk=len(awards), held=len(done),
+        window={"from": window_from, "to": window_to}), indent=1, default=str))
+    say(f"{len(awards)} award rows on disk")
+    return awards, coverage
+
+
 def cmd_analyze(args: argparse.Namespace) -> int:
     """The README deliverable command. Produces every required build/ artifact."""
     from . import lineage as lineage_mod
@@ -804,91 +983,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         print(f"        reused {len(awards)} cached award rows")
     else:
         window_from = args.awards_from or assemble.default_awards_from(cutoff)
-        slices = []
-        # Subdivide a still-capped day by acquisition method. The value list is a lower
-        # bound read off whatever is already cached, so the sweep measures what the
-        # subdivision actually recovered rather than assuming the list is exhaustive.
-        # Two axes, tried in order. Acquisition method first because it comes free from
-        # rows already collected; business unit second because one method dominates --
-        # `Fair and Reasonable - COMPETITIVE` was over the cap on every day of the
-        # reference window even pinned, so a single axis cannot finish. Both lists are
-        # lower bounds, which is why the sweep measures what it recovered.
-        axes = []
-        # Named distinctly from `cached`, which is the output *path* set above. Reusing
-        # that name here clobbered it and the sweep died writing its own results -- on
-        # the full-sweep branch only, so every --reuse-awards run passed and every real
-        # one lost ninety minutes of throttled requests.
-        previous_awards = assemble._read_jsonl(outdir / "awards.jsonl")
-        if previous_awards:
-            methods = scprs.observed_acq_methods(previous_awards)
-            if methods:
-                axes.append(("acq_method", methods))
-        units = scprs.observed_business_units(assemble._read_jsonl(outdir / "events.jsonl"))
-        if units:
-            axes.append(("business_unit", units))
-        # Resume rather than restart. This sweep is the longest transaction in the
-        # pipeline and has lost about ninety minutes twice: once to memory pressure,
-        # once to a crash writing its own output. A slice that answered is not asked
-        # again; a slice that failed stays pending.
-        sweep_state = harvest_state.load(outdir)
-        done = {u for u, e in (sweep_state.get("sources", {})
-                               .get("caleprocure_scprs", {})
-                               .get("units", {})).items()
-                if e.get("outcome") in harvest_state.DONE}
-
-        def note_slice(key: str, outcome: str, rows: int) -> None:
-            harvest_state.record(sweep_state, "caleprocure_scprs", key,
-                                 outcome=outcome, rows=rows)
-
-        for result in scprs.search_date_sliced(
-                session, window_from, cutoff, subdivide_by=axes or None,
-                skip=done, on_slice=note_slice):
-            # A subdivided parent slice is yielded for its shortfall note and carries the
-            # same rows its children already yielded. Taking them again double-counts.
-            if result.get("subdivided"):
-                continue
-            # Checkpoint per slice. The save below only runs if the whole sweep
-            # finishes, so a run killed part-way -- the memory kill this resume was
-            # built for -- held nothing and refetched all of it. Rows before state:
-            # a crash between the two costs one refetch, whereas marking a slice
-            # done whose rows never reached disk would leave a hole nothing reports.
-            documents.write_jsonl(result["rows"], cached, append=True)
-            harvest_state.save(outdir, sweep_state)
-            # Keep the slice's tally, drop its rows. They are on disk a line above,
-            # and coverage only ever asks how many there were. Holding them here as
-            # well retained every row twice for the length of the sweep, which is
-            # what killed this run three times; twelve months would not have fit at
-            # all. Peak memory is now one slice, not the whole window.
-            slices.append({k: v for k, v in result.items() if k != "rows"}
-                          | {"rows_collected": len(result["rows"])})
-        harvest_state.save(outdir, sweep_state)
-        if done:
-            print(f"        resumed: {len(done)} slice(s) already held, "
-                  f"{len(previous_awards)} cached rows carried")
-        coverage = assemble.award_sweep_coverage(slices)
-        coverage_path = outdir / "awards_coverage.json"
-        existing_coverage = (json.loads(coverage_path.read_text())
-                             if coverage_path.exists() else None)
-        if not coverage["complete"]:
-            print(f"        WARNING: {coverage['slices_truncated']} of "
-                  f"{coverage['slices']} slices hit the grid cap; "
-                  f"{coverage['rows_reported_by_portal'] - coverage['rows_collected']} "
-                  f"reported rows not retrieved (see awards_coverage.json)")
-        # Read back what the sweep checkpointed instead of carrying it in memory: the
-        # file already holds this run's slices appended to whatever an earlier run left,
-        # so this is both the dedupe and the resume carry-over in one pass. Last wins,
-        # so a row fetched now replaces the cached copy of the same award.
-        # ponytail: reads the whole corpus once at the end. If the window ever outgrows
-        # memory at that point, stream it through a temp file keyed on award_key.
-        awards = list({assemble.award_key(r): r
-                       for r in assemble._read_jsonl(cached)}.values())
-        documents.write_jsonl(awards, cached)
-        # Written after the rows, and always -- a verdict is only worth publishing next
-        # to the corpus it describes.
-        coverage_path.write_text(json.dumps(assemble.award_coverage_verdict(
-            coverage, existing_coverage, rows_on_disk=len(awards), held=len(done),
-            window={"from": window_from, "to": cutoff}), indent=1, default=str))
-        print(f"        {len(awards)} award rows")
+        awards, _ = sweep_awards(session, outdir, window_from, cutoff,
+                                 say=lambda m: print(f"        {m}"))
 
     # 5. Lineage -- always emits a trace, including an explicit no-match.
     print("  [5/9] predecessor search")
@@ -1099,6 +1195,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="deepen award history for the prime-eligible vendor set")
     bp.add_argument("--opportunity", required=True)
 
+    ba = sub.add_parser("backfill-awards", parents=[common],
+                        help="deepen award history a calendar month at a time, "
+                             "newest first")
+    ba.add_argument("--since", required=True,
+                    help="earliest date to collect, MM/DD/YYYY")
+    ba.add_argument("--until", required=True, help="latest date, MM/DD/YYYY")
+    ba.add_argument("--months", type=int, default=0,
+                    help="stop after this many months; 0 walks the whole range")
+
     va = sub.add_parser("vendor-ads", parents=[common],
                         help="harvest Cal eProcure vendor ads (declared interest, "
                              "never bidders)")
@@ -1182,7 +1287,7 @@ def main(argv: list[str] | None = None) -> int:
             "tabulations": cmd_tabulations, "auth": cmd_auth, "limits": cmd_limits,
             "planetbids": cmd_planetbids,
             "lpa": cmd_lpa, "suppliers": cmd_suppliers, "cslb": cmd_cslb, "csu": cmd_csu, "sacramento": cmd_sacramento,
-            "vendor-ads": cmd_vendor_ads,
+            "vendor-ads": cmd_vendor_ads, "backfill-awards": cmd_backfill_awards,
             "coverage": cmd_coverage}[
         args.command](args)
 

@@ -437,6 +437,109 @@ class BidderSourceRegistryTests(unittest.TestCase):
         self.assertEqual(sf.record_source, "sfpublicworks_bid_tabulation")
         self.assertEqual(caltrans.record_source, "caleprocure_event_list")
 
+class MonthWindowTests(unittest.TestCase):
+    """A backfill is walked in calendar months so a stopped run is still describable."""
+
+    def test_a_year_splits_into_calendar_months_newest_first(self) -> None:
+        # Newest first because recency dominates the features: stop early and the
+        # months you kept are the ones worth having.
+        w = cli.month_windows("09/11/2025", "09/10/2026")
+        self.assertEqual(w[0], ("09/01/2026", "09/10/2026"))
+        self.assertEqual(w[-1], ("09/11/2025", "09/30/2025"))
+        self.assertEqual(len(w), 13)
+
+    def test_windows_are_contiguous_and_never_overlap(self) -> None:
+        import datetime as dt
+        w = list(reversed(cli.month_windows("01/15/2026", "05/03/2026")))
+        for (_, end), (nxt, _) in zip(w, w[1:]):
+            self.assertEqual(
+                dt.datetime.strptime(nxt, "%m/%d/%Y").date()
+                - dt.datetime.strptime(end, "%m/%d/%Y").date(),
+                dt.timedelta(days=1), f"gap or overlap at {end} -> {nxt}")
+
+    def test_the_range_ends_are_respected_not_rounded_out(self) -> None:
+        # Rounding to whole months would collect days the caller did not ask for.
+        w = cli.month_windows("02/10/2026", "02/20/2026")
+        self.assertEqual(w, [("02/10/2026", "02/20/2026")])
+
+    def test_february_in_a_leap_year(self) -> None:
+        w = cli.month_windows("02/01/2024", "03/01/2024")
+        self.assertEqual(w[-1], ("02/01/2024", "02/29/2024"))
+
+    def test_a_backwards_range_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            cli.month_windows("09/10/2026", "09/11/2025")
+
+    def test_a_single_day_is_one_window(self) -> None:
+        self.assertEqual(cli.month_windows("09/03/2026", "09/03/2026"),
+                         [("09/03/2026", "09/03/2026")])
+
+
+class BackfillAwardsTests(unittest.TestCase):
+    """One month failing must not cost the months after it."""
+
+    def _args(self, tmp, **over):
+        import argparse
+        base = dict(output=tmp, delay=0, browser_headers=False,
+                    since="07/01/2026", until="09/30/2026", months=0)
+        base.update(over)
+        return argparse.Namespace(**base)
+
+    def test_every_month_is_swept_and_logged(self) -> None:
+        from unittest import mock
+        swept = []
+
+        def fake(session, outdir, start, end, *, say=print):
+            swept.append((start, end))
+            return [], {"rows_collected": 1, "rows_reported_by_portal": 1,
+                        "complete": True, "slices": 1}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (pathlib.Path(tmp) / "awards.jsonl").write_text("")
+            with mock.patch.object(cli, "_session", lambda a: object()), \
+                    mock.patch.object(cli, "sweep_awards", fake):
+                self.assertEqual(cli.cmd_backfill_awards(self._args(tmp)), 0)
+            log = [json.loads(l) for l
+                   in (pathlib.Path(tmp) / "awards_backfill_coverage.jsonl").read_text()
+                   .splitlines() if l.strip()]
+        self.assertEqual(swept[0], ("09/01/2026", "09/30/2026"), "not newest first")
+        self.assertEqual(len(swept), 3)
+        self.assertEqual(len(log), 3, "a per-window verdict is the only way to say "
+                                      "which months are actually complete")
+
+    def test_a_failing_month_does_not_stop_the_rest(self) -> None:
+        from unittest import mock
+        seen = []
+
+        def fake(session, outdir, start, end, *, say=print):
+            seen.append(start)
+            if start == "08/01/2026":
+                raise RuntimeError("portal timed out")
+            return [], {"rows_collected": 1, "complete": True}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (pathlib.Path(tmp) / "awards.jsonl").write_text("")
+            with mock.patch.object(cli, "_session", lambda a: object()), \
+                    mock.patch.object(cli, "sweep_awards", fake):
+                code = cli.cmd_backfill_awards(self._args(tmp))
+            log = (pathlib.Path(tmp) / "awards_backfill_coverage.jsonl").read_text()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(seen), 3, "a failed month took the later months with it")
+        self.assertNotIn("08/01/2026", log, "a failed month must not log a verdict")
+
+    def test_months_caps_how_much_is_attempted(self) -> None:
+        from unittest import mock
+        seen = []
+        with tempfile.TemporaryDirectory() as tmp:
+            (pathlib.Path(tmp) / "awards.jsonl").write_text("")
+            with mock.patch.object(cli, "_session", lambda a: object()), \
+                    mock.patch.object(cli, "sweep_awards",
+                                      lambda s, o, a, b, say=print: (
+                                          seen.append(a), ([], {"complete": True}))[1]):
+                cli.cmd_backfill_awards(self._args(tmp, months=2))
+        self.assertEqual(seen, ["09/01/2026", "08/01/2026"])
+
+
 class CoverageVerdictTests(unittest.TestCase):
     """A coverage verdict must never describe a corpus that is not on disk."""
 
