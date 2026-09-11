@@ -171,12 +171,15 @@ cost a day to find and is the single most useful thing in this document.
 
 - Endpoint we call: `https://data.ca.gov/dataset/purchase-order-data`
 - Provides: awards/purchase orders
-- Access: API (datastore_search_sql) - ROBOTS CONFLICT, see constraints
+- Access: download (CKAN resource CSV; NOT the datastore API)
 - Login required: no
 - When it becomes public: published extract
 - History available: FY2012-13 to FY2014-15 (~11 years stale)
 - Stable identifiers: resource id bb82edc5-9c78-44e2-8947-68ece26197c5; Supplier Code; Purchase Order Number
-- Verified: 2026-09-07
+- Verified: 2026-09-10
+- **Access note:** `robots.txt` disallows `/api/` and `/datastore/*`, so the
+  `datastore_search_sql` route stays off. `/dataset/*/resource/*/download/*` is not
+  disallowed and is the route to use. `Crawl-delay: 10` applies, well above our default.
 - **Gaps and caveats:** ~11 years stale - inference corpus only, never a current-incumbent source; age must enter confidence. Total Price is text with $ and padding so sums need cleaning
 
 ### PeopleSoft components on the backend host
@@ -192,7 +195,60 @@ cost a day to find and is the single most useful thing in this document.
 - **Gaps and caveats:** Not needed: caleprocure.ca.gov reverse-proxies the same application, so the backend host is redundant. Retained so the timeout is not re-investigated.
 
 
+## Reachable, but only with a rendered page
+
+Plain HTTP gets a shell or a refusal from these; a real browser gets the data. That is
+being the client the site expects rather than defeating anything - see the anti-bot
+clause in `SECURITY.md`.
+
+### Public .aspx search pages (InFlight/NLX wrapper)
+
+- Browser page: `https://caleprocure.ca.gov/pages/public-search.aspx`
+- Provides: solicitations, suppliers
+- Access: rendered page (SPA; plain HTTP returns a shell with no data)
+- Login required: no
+- Verified: 2026-09-10
+- **Gaps and caveats:** previously recorded as a dead end, on the correct observation that
+  plain HTTP returns 50KB of markup and no data. With a browser it renders 235 distinct
+  events - but that is fewer than the 375 the `.GBL` feed returns, and every row on the
+  first page reads `Posted`, so it neither replaces the feed nor supplies the closure
+  signal the feed lacks. Wrapped components should still be targeted directly. Reading it
+  needs a wait for an *attached* row node: `wait_until` alone races the XHR that fills the
+  grid, and the unrendered template parses cleanly as a page with zero results.
+
+### Per-agency vendor portal (bid opportunities, results, planholders)
+
+- Browser page: https://pbsystem.planetbids.com/portal/<companyId>/bo/bo-search
+- Provides: solicitations/bidders/awards
+- Access: rendered page (SPA; plain HTTP returns 405)
+- Login required: no for public stages; an account only for by-invite solicitations
+- Verified: 2026-09-10
+- **Why it matters:** the largest bidder-list corpus in California local government, and
+  the one platform whose own vendor documentation says planholder lists and bid results
+  are public without a login. Read end to end on Anaheim (`14424`): 136KB, 62 rows, with a
+  stage filter exposing Planning / Bidding / Closed / Award Pending / Awarded / Canceled /
+  Rejected.
+- **Gaps and caveats:** decentralised - one portal per agency keyed by a numeric
+  `companyId`, with no public master directory, so the agency list is curated rather than
+  discovered. `vendors.planetbids.com` and `pbsystem.planetbids.com` serve the same app.
+- **OPEN, and it blocks a wide sweep:** the published terms-of-use URL 302s to a host that
+  returns 405, so the automated-access terms could not be read. They need obtaining before
+  this is pointed at agency portals in volume.
+
 ## Dead ends, recorded so they are not retried
+
+### Planholder search, advertised projects and addenda
+
+- Endpoint we call: https://ppmoe2.dot.ca.gov/des/oe/planholders/
+- Provides: planholders/solicitations
+- Access: unreachable (403)
+- Verified: 2026-09-10
+- **Gaps and caveats:** would be the highest-value state surface after the Caltrans weekly
+  bid results, since planholders name companies against a named contract, and Caltrans
+  contract numbers are Cal eProcure event ids under business unit 2660. Refuses with 403
+  to plain HTTP, to a full browser header set, to local Chrome, and to a hosted browser
+  from a different address - so the block is neither user-agent nor address shaped.
+  Compliant routes left: ask Caltrans Office of Engineering directly, or a records request.
 
 ### SCPRS/CSCR historical contracts data
 
@@ -206,17 +262,6 @@ cost a day to find and is the single most useful thing in this document.
 - Verified: 2026-09-07
 - **Gaps and caveats:** README treats this as a bulk seed; it is not one any more. Use SCPRS live search + data.ca.gov corpus instead
 
-### Public .aspx search pages (InFlight/NLX wrapper) - DO NOT USE
-
-- Endpoint we call: `https://caleprocure.ca.gov/pages/public-search.aspx`
-- Provides: n/a
-- Access: browser-only
-- Login required: no
-- When it becomes public: n/a
-- History available: n/a
-- Stable identifiers: n/a
-- Verified: 2026-09-07
-- **Gaps and caveats:** RECORDED AS A DEAD END so it is not retried. These wrap the PeopleSoft components above - always target the .GBL component directly
 
 
 ## How to reach the PeopleSoft endpoints

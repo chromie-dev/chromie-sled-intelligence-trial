@@ -8,23 +8,15 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import html as htmllib
-import http.cookiejar
-import os
 import re
-import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
-# Self-identifying crawler user-agent in the conventional format (the same shape as
-# Googlebot's). It names the project so the operator can see who is calling, and claims to be
-# no particular browser. A contact address is only included when SLED_TRIAL_CONTACT is set --
-# a personal address does not belong in a header sent to a third-party server by default, and
-# hard-coding one puts it in that server's access logs on every request.
-_CONTACT = os.environ.get("SLED_TRIAL_CONTACT", "").strip()
-UA = ("Mozilla/5.0 (compatible; chromie-sled-trial-research/0.1"
-      + (f"; +mailto:{_CONTACT}" if _CONTACT else "") + ")")
+from ...net import UA, TransientFetchError  # noqa: F401  (re-exported for adapters)
+from ...net.http import HttpFetcher
+
 HOST = "https://caleprocure.ca.gov"
 COMP = f"{HOST}/psc/psfpd1/SUPPLIER/ERP/c"
 EVENT_LIST_URL = f"{COMP}/AUC_MANAGE_BIDS.AUC_RESP_INQ_AUC.GBL"
@@ -155,77 +147,18 @@ def filename_solicitation_mismatch(filename: str, event_id: str) -> bool:
     return bool(tokens) and event_id not in tokens
 
 
-class TransientFetchError(RuntimeError):
-    """Every retry was exhausted. Recorded as a typed failure, never a silent empty result."""
-
-
 @dataclass
-class CalEProcureSession:
-    """Carries the cookie jar and the PeopleSoft state chain.
+class CalEProcureSession(HttpFetcher):
+    """`HttpFetcher` plus the PeopleSoft state chain.
 
     ICSID is constant for the session; ICStateNum increments on every postback and each
     POST must carry the value from the previous response. That makes attachment retrieval
-    serial within one event.
+    serial within one event. The transport underneath is jurisdiction-neutral and lives in
+    `sled_trial.net`; only this state machine is Cal-eProcure-specific.
     """
 
-    delay_seconds: float = 1.5
-    max_attempts: int = 3
-    retry_backoff_seconds: float = 2.0
-    _opener: Any = field(default=None, repr=False)
     _state: dict[str, str] = field(default_factory=dict, repr=False)
     _bootstrapped: bool = field(default=False, repr=False)
-
-    def __post_init__(self) -> None:
-        jar = http.cookiejar.CookieJar()
-        self._opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-
-    def _open(self, req: urllib.request.Request, timeout: int) -> tuple[bytes, Any]:
-        """One request, with a voluntary delay and bounded retries on transient failures.
-
-        Retries cover DNS and connection errors and 5xx responses -- a portal 500 and a
-        local DNS blip both killed real runs. A 4xx is not retried: it will not become a
-        different answer, and hammering it is rude. Backoff is linear and bounded so a
-        broken host cannot turn one call into an unbounded wait.
-        """
-        last: Exception | None = None
-        for attempt in range(self.max_attempts):
-            time.sleep(self.delay_seconds + attempt * self.retry_backoff_seconds)
-            try:
-                with self._opener.open(req, timeout=timeout) as resp:
-                    return resp.read(), resp.headers
-            except urllib.error.HTTPError as exc:
-                if exc.code < 500:
-                    raise
-                last = exc
-            except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
-                last = exc
-        raise TransientFetchError(
-            f"{self.max_attempts} attempts failed for {req.full_url[:120]}: "
-            f"{type(last).__name__}: {last}") from last
-
-    def get(self, url: str, referer: str | None = None, timeout: int = 120) -> tuple[bytes, Any]:
-        headers = {"User-Agent": UA}
-        if referer:
-            headers["Referer"] = referer
-        return self._open(urllib.request.Request(url, headers=headers), timeout)
-
-    def post_raw(self, url: str, body: bytes, *, referer: str | None = None,
-                 timeout: int = 180) -> tuple[bytes, Any]:
-        """POST a caller-built form body, bypassing the session's state tracking.
-
-        `post_action` is for components where this session harvested the page state itself.
-        Some components -- the supplier search, for one -- are simpler to drive by reading
-        their hidden fields directly and posting them back, so this exists rather than
-        forcing every caller through the state machine.
-        """
-        headers = {
-            "User-Agent": UA,
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "*/*",
-        }
-        if referer:
-            headers["Referer"] = referer
-        return self._open(urllib.request.Request(url, data=body, headers=headers), timeout)
 
     def post_action(self, action: str, referer: str, timeout: int = 120,
                     url: str | None = None, extra: dict[str, str] | None = None,
@@ -244,11 +177,10 @@ class CalEProcureSession:
         req = urllib.request.Request(
             url or EVENT_DETAIL_URL,
             data=urllib.parse.urlencode(fields).encode(),
-            headers={
-                "User-Agent": UA,
+            headers=self._headers({
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Referer": referer,
-            },
+            }),
         )
         body, headers = self._open(req, timeout)
         self.absorb_state(body)

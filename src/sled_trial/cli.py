@@ -25,6 +25,18 @@ from .sources.ca import caleprocure as ca
 DEFAULT_RAW = "data/raw/documents"
 
 
+def _session(args: argparse.Namespace) -> ca.CalEProcureSession:
+    """The Cal eProcure transport for every state command.
+
+    Not swappable for a browser: these components are driven by PeopleSoft postbacks that
+    carry an ICStateNum chain, which `CalEProcureSession` maintains and a page-navigation
+    transport cannot. Sources that only need to read a rendered page take a fetcher from
+    `sled_trial.net.build_fetcher` instead.
+    """
+    return ca.CalEProcureSession(delay_seconds=args.delay,
+                                 browser_headers=args.browser_headers)
+
+
 def _event_pairs(values: list[str]) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
     for value in values:
@@ -40,7 +52,7 @@ def _event_pairs(values: list[str]) -> list[tuple[str, str]]:
 
 
 def cmd_events(args: argparse.Namespace) -> int:
-    session = ca.CalEProcureSession(delay_seconds=args.delay)
+    session = _session(args)
     rows = ca.parse_event_list(ca.fetch_event_list(session))
     if not rows:
         print("no events parsed -- refusing to write an empty feed", file=sys.stderr)
@@ -58,7 +70,7 @@ def cmd_events(args: argparse.Namespace) -> int:
 
 def cmd_documents(args: argparse.Namespace) -> int:
     pairs = _event_pairs(args.event)
-    session = ca.CalEProcureSession(delay_seconds=args.delay)
+    session = _session(args)
     store = documents.DocumentStore(args.raw_root)
     manifest: list[dict[str, Any]] = []
     pages: list[dict[str, Any]] = []
@@ -111,7 +123,7 @@ def cmd_spending(args: argparse.Namespace) -> int:
 
     outdir = pathlib.Path(args.output)
     outdir.mkdir(parents=True, exist_ok=True)
-    session = ca.CalEProcureSession(delay_seconds=args.delay)
+    session = _session(args)
 
     # Departments our own vendor profiles actually serve, in award-volume order, mapped to
     # business-unit codes through the event feed. Spending files are keyed by code, profiles
@@ -203,7 +215,7 @@ def cmd_bidders(args: argparse.Namespace) -> int:
     start = end - dt.timedelta(weeks=args.weeks)
     print(f"harvesting Caltrans bid results, {start} to {end}")
 
-    session = ca.CalEProcureSession(delay_seconds=args.delay)
+    session = _session(args)
     result = caltrans.harvest(session, start, end)
     candidates = caltrans.bidder_candidates(result["solicitations"])
 
@@ -252,7 +264,7 @@ def cmd_tabulations(args: argparse.Namespace) -> int:
 
     outdir = pathlib.Path(args.output)
     outdir.mkdir(parents=True, exist_ok=True)
-    session = ca.CalEProcureSession(delay_seconds=args.delay)
+    session = _session(args)
 
     # The calendar links only a slice of each meeting's papers; the attachment carrying a
     # tabulation usually hangs off the meeting's own page, and those are /node/<id> URLs
@@ -350,7 +362,7 @@ def cmd_backfill_primes(args: argparse.Namespace) -> int:
     print(f"{len(eligible)} of {len({a.get('supplier_id') for a in awards})} vendors are "
           f"eligible to prime this opportunity")
 
-    session = ca.CalEProcureSession(delay_seconds=args.delay)
+    session = _session(args)
     merged = {(r.get("purchase_doc"), r.get("supplier_id")): r for r in awards}
     truncated: list[str] = []
     for n, sid in enumerate(eligible, 1):
@@ -374,6 +386,68 @@ def cmd_backfill_primes(args: argparse.Namespace) -> int:
     return 0
 
 
+def _context_store(outdir: pathlib.Path) -> pathlib.Path:
+    return outdir / "contexts.json"
+
+
+def cmd_auth(args: argparse.Namespace) -> int:
+    """Sign in to a portal once, by hand, and keep the session for later runs.
+
+    A saved Browserbase context holds the cookies. A person opens the printed live-view
+    URL, signs in with credentials from `.env`, and clears any one-time verification the
+    portal shows. Every later harvest reuses the context read-only and arrives already
+    authenticated, so this is run once per portal rather than once per run.
+
+    Deliberately interactive. Automating the sign-in form would make the harvester a
+    thing that submits forms, and `SECURITY.md` says it retrieves and parses only.
+    """
+    from .net import browser
+
+    outdir = pathlib.Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    store_path = _context_store(outdir)
+    store = json.loads(store_path.read_text()) if store_path.exists() else {}
+
+    context_id = store.get(args.source)
+    if context_id and not args.new:
+        print(f"reusing saved context for {args.source}")
+    else:
+        context_id = browser.create_context(f"sled-trial-{args.source}")
+        print(f"created a new context for {args.source}")
+
+    session = browser.create_session(context_id=context_id, persist=True)
+    print(f"\n  open this and sign in:\n    {browser.live_view_url(session['id'])}")
+    print(f"\n  session replay: https://www.browserbase.com/sessions/{session['id']}")
+    print(f"\n  credentials are in .env under the keys for {args.source};"
+          "\n  do not paste them anywhere else, and do not screenshot the signed-in page.")
+    try:
+        input("\n  press enter here once you are signed in (or ctrl-c to abandon) ")
+    except (KeyboardInterrupt, EOFError):
+        print("\nabandoned; nothing saved")
+        return 1
+
+    store[args.source] = context_id
+    store_path.write_text(json.dumps(store, indent=1))
+    print(f"\nsaved. later runs reuse this context read-only.\n  {store_path}")
+    return 0
+
+
+def cmd_limits(args: argparse.Namespace) -> int:
+    """What the Browserbase key is allowed to do. Recorded so a quota is not read as a bug."""
+    from .net import browser
+
+    limits = browser.account_limits()
+    outdir = pathlib.Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "browserbase_limits.json").write_text(json.dumps(limits, indent=1))
+    for project in limits["projects"]:
+        tier = {3: "free", 25: "developer"}.get(project["concurrency"], "unknown")
+        print(f"  {project['name']}: concurrency {project['concurrency']} ({tier} tier), "
+              f"session cap {project['session_timeout_seconds']}s, "
+              f"{project.get('browser_minutes_used')} browser-minutes used")
+    return 0
+
+
 def cmd_analyze(args: argparse.Namespace) -> int:
     """The README deliverable command. Produces every required build/ artifact."""
     from . import lineage as lineage_mod
@@ -394,7 +468,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     client = opportunity.get("client_profile") or {}
     outdir = pathlib.Path(args.output)
     outdir.mkdir(parents=True, exist_ok=True)
-    session = ca.CalEProcureSession(delay_seconds=args.delay)
+    session = _session(args)
 
     print(f"analyze {bu}/{eid}  cutoff={cutoff}  output={outdir}")
 
@@ -607,6 +681,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="per-request delay, seconds (voluntary rate limit)")
     common.add_argument("--raw-root", default=DEFAULT_RAW)
     common.add_argument("--no-ocr", action="store_true", help="skip OCR fallback")
+    common.add_argument("--browser-headers", action="store_true",
+                        help="send a full browser header set; some hosts 403 a bare "
+                             "crawler UA without running an actual challenge")
 
     parser = argparse.ArgumentParser(prog="sled_trial")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -655,6 +732,15 @@ def build_parser() -> argparse.ArgumentParser:
     tb.add_argument("--page", action="append",
                     help="page to discover PDFs from; repeatable, defaults to the "
                          "commission calendar")
+    au = sub.add_parser("auth", parents=[common],
+                        help="sign in to a portal once and save the session")
+    au.add_argument("--source", required=True,
+                    help="portal key, e.g. planetbids")
+    au.add_argument("--new", action="store_true",
+                    help="force a fresh context instead of reusing the saved one")
+    sub.add_parser("limits", parents=[common],
+                   help="report what the Browserbase key is allowed to do")
+
     tb.add_argument("--max-pages", type=int, default=5,
                     help="pages to search per document; a tabulation is front matter")
 
@@ -669,7 +755,7 @@ def main(argv: list[str] | None = None) -> int:
     return {"events": cmd_events, "documents": cmd_documents, "analyze": cmd_analyze,
             "spending": cmd_spending, "evaluate": cmd_evaluate,
             "backfill-primes": cmd_backfill_primes, "bidders": cmd_bidders,
-            "tabulations": cmd_tabulations}[
+            "tabulations": cmd_tabulations, "auth": cmd_auth, "limits": cmd_limits}[
         args.command](args)
 
 

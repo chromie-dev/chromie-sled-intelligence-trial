@@ -15,6 +15,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 ocr = ["pytesseract>=0.3", "pdf2image>=1.17"]
+# Only needed for sources that render client-side or answer a bare GET with a challenge.
+# The whole test suite runs without these -- the browser transport is faked offline.
+browser = ["playwright>=1.47", "browserbase>=1.0", "python-dotenv>=1.0"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

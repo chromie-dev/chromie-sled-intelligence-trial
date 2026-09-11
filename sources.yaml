@@ -8,7 +8,8 @@
 #
 # mode is how the pipeline reaches a surface, not a feature toggle:
 #   live                    - plain HTTP, verified, in use
-#   manual                  - public but needs a person (login we do not use, or email request)
+#   live_browser            - needs a rendered page; plain HTTP returns a shell or a refusal
+#   manual                  - public but needs a person (login, or an email request)
 #   blocked_pending_decision - technically reachable, permission question unresolved
 #   unresolved              - could not be characterised
 #   dead_end                - recorded so it is not retried
@@ -145,12 +146,12 @@ sources:
       payments only - no bidders, no solicitation ids. VENDOR_NAME truncated ~30 chars, so join to SCPRS supplier_id by name with low confidence. document_id is a FI$Cal voucher ref; join to SCPRS purchase_doc UNPROVEN. 10.6GB total, selective fetch required
 
   - id: data_ca_gov_purchase_orders
-    mode: blocked_pending_decision
+    mode: live
     jurisdiction: California (state)
     portal: data.ca.gov (CKAN Datastore)
     name: Purchase Order Data (DGS) - historical inference corpus
     provides: awards/purchase orders
-    access_method: API (datastore_search_sql) - ROBOTS CONFLICT, see constraints
+    access_method: download (CKAN resource CSV; NOT the datastore API)
     auth_required: no
     official_url: https://data.ca.gov/dataset/purchase-order-data
     verified_on: 2026-09-07
@@ -184,7 +185,8 @@ sources:
       Not needed: caleprocure.ca.gov reverse-proxies the same application, so the backend host is redundant. Retained so the timeout is not re-investigated.
 
   - id: caleprocure_aspx_wrapper
-    mode: dead_end
+    mode: live_browser
+    verified_on: 2026-09-10
     jurisdiction: California (state)
     portal: Cal eProcure
     name: Public .aspx search pages (InFlight/NLX wrapper) - DO NOT USE
@@ -195,3 +197,38 @@ sources:
     verified_on: 2026-09-07
     known_gaps: >-
       RECORDED AS A DEAD END so it is not retried. These wrap the PeopleSoft components above - always target the .GBL component directly
+
+  - id: planetbids_agency_portal
+    mode: live_browser
+    jurisdiction: California (local)
+    portal: PlanetBids
+    name: Per-agency vendor portal (bid opportunities, results, planholders)
+    provides: solicitations/bidders/awards
+    access_method: rendered page (SPA; plain HTTP returns 405)
+    auth_required: no for public stages; account only for by-invite solicitations
+    official_url: https://pbsystem.planetbids.com/portal/<companyId>/bo/bo-search
+    verified_on: 2026-09-10
+    known_gaps: >-
+      Decentralised - one portal per agency, keyed by a numeric companyId with no public
+      master directory, so the agency list is curated rather than discovered. Verified on
+      Anaheim (14424): stage filter exposes Planning/Bidding/Closed/Award Pending/Awarded/
+      Canceled/Rejected. vendors.planetbids.com and pbsystem.planetbids.com serve the same
+      app. Terms of use not yet retrieved - the published URL 302s to a host returning 405,
+      so the automation-access question is OPEN and blocks a wide sweep
+
+  - id: caltrans_oe_planholders
+    mode: dead_end
+    jurisdiction: California (state)
+    portal: Caltrans Office of Engineering
+    name: Planholder search, advertised projects and addenda
+    provides: planholders/solicitations
+    access_method: unreachable (403)
+    auth_required: unknown
+    official_url: https://ppmoe2.dot.ca.gov/des/oe/planholders/
+    verified_on: 2026-09-10
+    known_gaps: >-
+      Would be the highest-value state surface after the weekly bid results - planholders
+      name companies that took out plans on a named contract. Refuses with 403 to plain
+      HTTP, to a full browser header set, to local Chrome and to a hosted browser from a
+      different address, so the block is not user-agent or IP shaped. Compliant routes
+      left: ask Caltrans OE directly, or a public records request
