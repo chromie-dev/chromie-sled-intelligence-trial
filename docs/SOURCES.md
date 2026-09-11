@@ -258,6 +258,68 @@ clause in `SECURITY.md`.
   decides: the underlying bid results are government public records held by the agencies
   and obtainable from them directly.
 
+### CSU public bid portal
+
+- Endpoint we call: https://bids.sciquest.com/apps/Router/PublicEvent?CustomerOrg=CalState
+- Provides: solicitations across 23 campuses and the Chancellor's Office, since 2020
+- Access: HTML, plain GET, one tab per lifecycle stage
+- Login required: no to list; a supplier login for the event detail
+- Verified: 2026-09-10
+- **Gaps and caveats:** solicitations only. The Award tab marks a row `Awarded` but the
+  awardee is named nowhere in the public listing, and the detail behind each row
+  redirects to a JAGGAER supplier login. So this widens the education opportunity
+  picture and adds nothing to the competitive one. Attribute quoting is mixed here as
+  it is on the PeopleSoft surfaces: a single-quote-only pattern parses the live page to
+  zero rows, which reads as "this tab has no solicitations".
+
+### Master list of California licensed contractors
+
+- Endpoint we call: https://www.cslb.ca.gov/onlineservices/dataportal/ContractorList
+- Provides: vendor identity — the licence number is the one id that crosses the bidder
+  sources, which otherwise publish names only or a platform id that stops at its edge
+- Access: download, ASP.NET postback, chunked CSV. No charge, no login
+- Verified: 2026-09-10
+- **Gaps and caveats:** the transfer tears at a different point every run — 15.5MB, then
+  6.5MB, then a best-of-four at 20MB and 64,767 rows against roughly 290,000. Retries
+  improve it and do not finish it, so the file is held under a `.PARTIAL` name and never
+  promoted. The fragment is ordered by licence number, so it is a front slice biased to
+  older licences rather than a sample. The portal also offers lists by classification
+  (78 values, up to ten per download) and by county, which would give files small enough
+  to complete; that form posts a multi-select listbox and the flow is not yet worked out.
+  Cancelled and revoked licences are excluded throughout, so absence means "not currently
+  licensed", not "never existed".
+
+### LA County Public Works bid results and bid price history
+
+- Endpoint we call: https://dpw.lacounty.gov/contracts/Opportunities.aspx?phase=AWARDED
+- Provides: awarded solicitations; a per-project bid-results PDF naming the full field
+- Access: plain HTML, then `BidResults.aspx?project_id=` which returns the PDF directly
+- Verified: 2026-09-10
+- **Deferred, on yield.** The chain works and needs no browser, and one PDF read cleanly:
+  `NAME OF BIDDER`, lump-sum bid, alternates, LSBE/DVBE/SE preference, engineer's
+  estimate, and a "Lowest Bidder" marker. But only 1 of 12 sampled awarded projects
+  served a PDF at all — the rest return a ~950-byte stub — and the county has moved
+  current work to Bid Express, so the self-hosted results are a shrinking tail. The
+  layout is a wide landscape table that varies between projects, so a pattern tuned to
+  one returns zero bidders on another. For comparison, PlanetBids returned 521 bidders
+  from 120 solicitations as structured JSON.
+- **Worth revisiting separately:** Bid Price History (`/general/bph/`) is a different and
+  richer surface — number of bids received per project, and line-item engineer's estimate
+  against low-bidder unit prices via `ProjectDetails.aspx?project_id=&bid_date=`.
+
+### City of Sacramento Bid Activities Report
+
+- Endpoint we call: https://services5.arcgis.com/54falWtcpty3V47Z/arcgis/rest/services/BidActivitiesReport/FeatureServer/0
+- Provides: solicitations with competitive-intensity counts
+- Access: ArcGIS FeatureServer query — typed JSON, no scraping and no browser
+- Verified: 2026-09-10 — 395 of 395 collected, reconciled against the layer's own count
+- **Counts, not names.** Each solicitation carries how many vendors were notified, how
+  many became prospective bidders, and how many of those were local. Nothing here joins
+  to a vendor. Only 34 rows carry an award amount.
+- **Worth having anyway:** the local share is the only measure in the corpus of how much
+  of a field an agency draws from its own city, and Sacramento publishes it directly
+  rather than leaving it to be inferred from bidder addresses.
+
 ## Dead ends, recorded so they are not retried
 
 ### Planholder search, advertised projects and addenda

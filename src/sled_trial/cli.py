@@ -448,6 +448,81 @@ def cmd_limits(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sacramento(args: argparse.Namespace) -> int:
+    """Harvest the City of Sacramento Bid Activities layer (ArcGIS open data).
+
+    Counts, not names: vendors notified, prospective bidders, and how many were local.
+    """
+    from .sources.ca import sacramento as sac
+
+    outdir = pathlib.Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    session = _session(args)
+
+    def fetch(url: str):
+        return json.loads(session.get(url, timeout=90)[0])
+
+    out = sac.harvest(fetch, on_progress=lambda m: print(f"        {m}"))
+    documents.write_jsonl(out["rows"], outdir / "sacramento_solicitations.jsonl")
+    (outdir / "sacramento_coverage.json").write_text(json.dumps(
+        {k: v for k, v in out.items() if k != "rows"}, indent=1, default=str))
+    if not out["complete"]:
+        print(f"        WARNING: collected {out['collected']} of "
+              f"{out['reported_by_layer']} the layer reported")
+    print(f"\n{out['collected']} solicitations "
+          f"({out['with_bidder_counts']} with a bidder count)")
+    return 0
+
+
+def cmd_csu(args: argparse.Namespace) -> int:
+    """Harvest the CSU public bid portal: 23 campuses on one endpoint.
+
+    Solicitations only. The Award tab marks status but never names the awardee, and
+    the detail behind each row needs a supplier login.
+    """
+    from .sources.ca import csu
+
+    outdir = pathlib.Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    session = _session(args)
+
+    def fetch(url: str) -> str:
+        return session.get(url, timeout=90)[0].decode("utf-8", "replace")
+
+    out = csu.harvest(fetch, on_progress=lambda m: print(f"        {m}"))
+    documents.write_jsonl(out["rows"], outdir / "csu_solicitations.jsonl")
+    (outdir / "csu_coverage.json").write_text(json.dumps(
+        {k: v for k, v in out.items() if k != "rows"}, indent=1, default=str))
+    print(f"\n{len(out['rows'])} solicitations across "
+          f"{len(out['campuses'])} campuses -> csu_solicitations.jsonl")
+    return 0
+
+
+def cmd_cslb(args: argparse.Namespace) -> int:
+    """Download the CSLB contractor register.
+
+    Free, no login, and the one identifier that crosses the bidder sources: Caltrans
+    and SF publish names only, PlanetBids ids stop at its own edge, and vendor ads cite
+    a licence number in free text.
+    """
+    from .sources.ca import cslb
+
+    outdir = pathlib.Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    session = _session(args)
+    reports = []
+    for which in (args.file or ["license_master"]):
+        report = cslb.download(session, which, dest=args.raw_root_registries,
+                               on_progress=lambda m: print(f"        {m}"))
+        reports.append(report)
+        if not report["complete"]:
+            print(f"        WARNING: {which} is incomplete and was NOT promoted to its "
+                  f"real name; {report['rows']} rows retrieved")
+    (outdir / "cslb_coverage.json").write_text(
+        json.dumps({"files": reports}, indent=1, default=str))
+    return 0 if all(r["complete"] for r in reports) else 1
+
+
 def cmd_suppliers(args: argparse.Namespace) -> int:
     """Build the supplier location/certification index the vendor profiles read.
 
@@ -866,6 +941,20 @@ def build_parser() -> argparse.ArgumentParser:
     tb.add_argument("--page", action="append",
                     help="page to discover PDFs from; repeatable, defaults to the "
                          "commission calendar")
+    sac_p = sub.add_parser("sacramento", parents=[common],
+                           help="harvest the Sacramento bid activities open dataset")
+
+    cu = sub.add_parser("csu", parents=[common],
+                        help="harvest the CSU public bid portal (23 campuses)")
+
+    cs = sub.add_parser("cslb", parents=[common],
+                        help="download the CSLB contractor register")
+    cs.add_argument("--file", action="append",
+                    choices=["license_master", "workers_comp", "personnel"],
+                    help="which register file; repeatable (default: license_master)")
+    cs.add_argument("--raw-root-registries", default="data/raw/registries",
+                    help="where the register files are written")
+
     su = sub.add_parser("suppliers", parents=[common],
                         help="rebuild the supplier location/certification index")
     su.add_argument("--limit", type=int, default=None,
@@ -911,7 +1000,7 @@ def main(argv: list[str] | None = None) -> int:
             "backfill-primes": cmd_backfill_primes, "bidders": cmd_bidders,
             "tabulations": cmd_tabulations, "auth": cmd_auth, "limits": cmd_limits,
             "planetbids": cmd_planetbids,
-            "lpa": cmd_lpa, "suppliers": cmd_suppliers}[
+            "lpa": cmd_lpa, "suppliers": cmd_suppliers, "cslb": cmd_cslb, "csu": cmd_csu, "sacramento": cmd_sacramento}[
         args.command](args)
 
 
