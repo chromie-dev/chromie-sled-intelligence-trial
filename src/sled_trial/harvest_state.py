@@ -101,6 +101,39 @@ def pending(state: dict[str, Any], source_key: str, units: Iterable[str],
                            stale_after_days=stale_after_days, now=now)]
 
 
+def days_held(state: dict[str, Any], source_key: str,
+              from_date: str, to_date: str) -> list[str]:
+    """Which single days in a window have a recorded slice, MM/DD/YYYY.
+
+    A day is reached either directly or pinned to a subdivision axis, so both key
+    shapes count. This is the question a backfill log has to answer -- "is this month
+    finished" is about days covered, not about how many rows one run happened to
+    fetch.
+    """
+    start = dt.datetime.strptime(from_date, "%m/%d/%Y").date()
+    end = dt.datetime.strptime(to_date, "%m/%d/%Y").date()
+    seen = set()
+    for key, entry in _units(state, source_key).items():
+        if entry.get("outcome") not in DONE:
+            continue
+        parts = dict(p.split("=", 1) for p in str(key).split("|") if "=" in p)
+        if parts.get("from") != parts.get("to") or "from" not in parts:
+            continue
+        try:
+            day = dt.datetime.strptime(parts["from"], "%m/%d/%Y").date()
+        except ValueError:
+            continue
+        if start <= day <= end:
+            seen.add(day)
+    return [d.strftime("%m/%d/%Y") for d in sorted(seen)]
+
+
+def window_days(from_date: str, to_date: str) -> int:
+    start = dt.datetime.strptime(from_date, "%m/%d/%Y").date()
+    end = dt.datetime.strptime(to_date, "%m/%d/%Y").date()
+    return (end - start).days + 1
+
+
 def summary(state: dict[str, Any]) -> dict[str, Any]:
     """What the store knows, per source."""
     out = {}

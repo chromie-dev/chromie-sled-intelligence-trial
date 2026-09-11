@@ -363,7 +363,7 @@ See `PROJECT_BRIEF.md`, `SECURITY.md`, and `AGENTS.md` before coding.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-python -m pytest -q                 # 739 tests, offline, no credentials
+python -m pytest -q                 # 744 tests, offline, no credentials
 
 python -m sled_trial.cli analyze \
   --opportunity data/examples/active_opportunity.json \

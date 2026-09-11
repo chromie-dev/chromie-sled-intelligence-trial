@@ -114,5 +114,55 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(hs.summary(state)["s"]["retryable"], 1)
 
 
+
+class DaysHeldTests(unittest.TestCase):
+    """Is this window finished? That is a question about days, not about rows.
+
+    A resumed month re-asks only its unheld days, so the rows it fetches are that
+    run's yield and never the month's total. September logged 2,274 then 1,603, each
+    marked complete, which reads as a contradiction to anyone but the author.
+    """
+
+    def _state(self, *keys):
+        state = hs.load(pathlib.Path(tempfile.mkdtemp()))
+        for key in keys:
+            hs.record(state, "caleprocure_scprs", key, rows=1)
+        return state
+
+    def test_a_day_reached_by_subdivision_counts(self) -> None:
+        # Most days are recorded pinned to an axis, not as a bare range.
+        state = self._state(
+            "from=09/01/2026|to=09/01/2026",
+            "acq_method=Fair and Reasonable - COMPETITIVE|from=09/02/2026|to=09/02/2026")
+        self.assertEqual(
+            hs.days_held(state, "caleprocure_scprs",
+                                    "09/01/2026", "09/03/2026"),
+            ["09/01/2026", "09/02/2026"])
+
+    def test_a_multi_day_range_is_not_a_day(self) -> None:
+        # A bisected range delegates to its halves; counting it as covered would call
+        # a window finished on the strength of work that was handed off.
+        state = self._state("from=09/01/2026|to=09/03/2026")
+        self.assertEqual(hs.days_held(state, "caleprocure_scprs",
+                                                 "09/01/2026", "09/03/2026"), [])
+
+    def test_days_outside_the_window_are_not_counted(self) -> None:
+        state = self._state("from=08/31/2026|to=08/31/2026",
+                            "from=09/01/2026|to=09/01/2026")
+        self.assertEqual(hs.days_held(state, "caleprocure_scprs",
+                                                 "09/01/2026", "09/30/2026"),
+                         ["09/01/2026"])
+
+    def test_a_failed_day_is_not_held(self) -> None:
+        state = hs.load(pathlib.Path(tempfile.mkdtemp()))
+        hs.record(state, "caleprocure_scprs", "from=09/01/2026|to=09/01/2026",
+                             outcome=hs.FAILED)
+        self.assertEqual(hs.days_held(state, "caleprocure_scprs",
+                                                 "09/01/2026", "09/01/2026"), [])
+
+    def test_window_days_counts_inclusively(self) -> None:
+        self.assertEqual(hs.window_days("09/01/2026", "09/10/2026"), 10)
+        self.assertEqual(hs.window_days("09/01/2026", "09/01/2026"), 1)
+
 if __name__ == "__main__":
     unittest.main()

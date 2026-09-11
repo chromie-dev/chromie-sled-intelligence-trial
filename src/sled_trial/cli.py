@@ -824,16 +824,29 @@ def cmd_backfill_awards(args: argparse.Namespace) -> int:
             print(f"        FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
             continue
         done += 1
-        # Appended, never overwritten: a per-window verdict is the only way to say
-        # which months are actually complete.
+        # Appended, never overwritten, and every line says what it measured. A resumed
+        # month re-asks only its unheld days, so `collected` is that run's yield and
+        # not the month's total -- September logged 2,274 then 1,603, both marked
+        # complete, which reads as a contradiction. What a reader actually wants is
+        # whether the window is finished, and that is a question about days covered.
+        state = harvest_state.load(outdir)
+        held = harvest_state.days_held(state, "caleprocure_scprs", start, end)
+        total_days = harvest_state.window_days(start, end)
         with log.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"window": {"from": start, "to": end},
-                                 "collected": coverage.get("rows_collected"),
-                                 "reported": coverage.get("rows_reported_by_portal"),
-                                 "complete": coverage.get("complete"),
-                                 "slices": coverage.get("slices"),
-                                 "collected_at": documents.utc_now()},
-                                default=str) + "\n")
+            fh.write(json.dumps({
+                "window": {"from": start, "to": end},
+                "window_days": total_days,
+                "days_held": len(held),
+                # The claim worth reading: every day in the window has answered.
+                "window_complete": len(held) == total_days,
+                "measured_this_run": {
+                    "collected": coverage.get("rows_collected"),
+                    "reported": coverage.get("rows_reported_by_portal"),
+                    "slices_complete": coverage.get("complete"),
+                    "slices": coverage.get("slices"),
+                },
+                "rows_on_disk": sum(1 for _ in (outdir / "awards.jsonl").open()),
+                "collected_at": documents.utc_now()}, default=str) + "\n")
     total = sum(1 for _ in (outdir / "awards.jsonl").open())
     print(f"\n{done} of {len(windows)} month(s) swept; {total} award rows on disk "
           f"(per-window verdicts in {log.name})")
