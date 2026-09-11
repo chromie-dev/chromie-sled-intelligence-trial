@@ -7,18 +7,33 @@ shaped the way it is. Organised by subject rather than by date.
 
 ## 1. The central question: who bid?
 
-**Cal eProcure does not publish bidder lists.** The Response Bid Inquiry component — the one
-surface that would name respondents — redirects to a login. No planholder lists, no bid
-results, no pre-bid attendance records are public there.
+**Cal eProcure does not publish bidder lists, and this is now tested rather than
+inferred.** The Response Bid Inquiry component was recorded as login-gated. It is not: it
+answers anonymously over plain HTTP. Signed in as a registered supplier it returns the same
+event grid, with no respondent column and no respondent field anywhere in the page — and
+signing in actively *breaks* the event detail the pipeline depends on, which is pinned to
+the generic Default Bidder id. This is PeopleSoft Strategic Sourcing behaving correctly: a
+bidder inquires about its own responses, not anyone else's. The pipeline stays anonymous.
 
-**California does publish them, agency by agency.** That is the finding the trial turned on,
-and it is narrower and more useful than the negative:
+**California publishes bidder lists agency by agency, and overwhelmingly on one platform.**
+That is the finding the work turned on:
 
 | Surface | What it gives | Scale |
 | --- | --- | --- |
-| Caltrans weekly bid results | Every bidder, ranked, with amount and Small Business status | 81 of 359 active events; 211 observations over 13 weeks |
-| SF Public Works tabulations | Every bidder, local-business status, price, **engineer's estimate** | 21 observations; 4 of 4 named more than one bidder |
+| PlanetBids agency portals | Every respondent with amount and certifications, **plus planholders**, keyed by a stable platform vendor id | 1,845 bidders and 25,090 planholders over 3 agencies; 1,269 and 10,538 distinct vendors |
+| Caltrans weekly bid results | Every bidder, ranked, with amount and Small Business status | 211 observations over 13 weeks |
+| SF Public Works tabulations | Every bidder, local-business status, price, **engineer's estimate** | 21 observations |
 | Award-notice PDFs on Cal eProcure events | The awardee and the winning amount | 1 observation |
+
+**Most local surfaces publish opportunities or counts, not names.** Surveying the rest of
+California local government is what makes the concentration visible, and the negatives are
+as useful as the positive: CSU marks a solicitation `Awarded` but hides the awardee behind a
+supplier login (577 solicitations, 22 campuses); Sacramento publishes bidder *counts* and a
+local-participation share but never a vendor (395 solicitations); LA County names the full
+field but only on roughly one awarded project in twelve, in varying PDF layouts, and has
+moved current work to Bid Express; UC has no systemwide public bid portal at all, unlike
+CSU. So the competitive data concentrates in PlanetBids, and the rest of the sector is an
+opportunity feed.
 
 Caltrans contract numbers **are** Cal eProcure event ids under business unit 2660 — the
 id space and format match exactly (`01A6671` in the feed, `01A6607` from the results). But
@@ -56,13 +71,24 @@ person and no supplier id.
 
 ## 2. Dead ends, recorded so they are not retried
 
-**PlanetBids — blocked.** Hundreds of California cities and counties use it, and it exposes
-bid results and plan-holder lists. Every portal URL redirects to an AWS WAF human-verification
-challenge, which appears with an ordinary desktop browser user-agent, and `robots.txt` returns
-a maintenance page rather than a robots file, so no crawl permission can be read from the site
-at all. A CAPTCHA-class control is one the brief and `SECURITY.md` both forbid working around.
-Compliant routes: a person reading a portal, an agency granting access on request, or a public
-records request. This is the largest source that remains out of reach.
+**PlanetBids — was recorded as blocked, and that was wrong.** The block was never an auth
+wall: the portal answers a bare HTTP client with 405 because it is not a browser. A real
+Chrome session reads it, and the app's own JSON API can then be called from inside the loaded
+page — the same requests a person clicking through causes. It is now the largest bidder source
+in the corpus. Two things the original note got right and one it got wrong: `robots.txt` does
+return a maintenance page rather than a crawl policy, the portal does sit behind an AWS WAF,
+and "out of reach" did not follow from either. Its terms carry no anti-automation clause; what
+they do restrict is commercial use of site content, which is a business decision rather than a
+technical one and is recorded against the source.
+
+**CSLB master register — a ceiling, not flakiness.** The contractor register is free and needs
+no login, and a licence number is the one identifier that crosses the bidder sources. The
+download is cut short server-side at roughly 20MB every run. Twelve attempts plateaued between
+48,000 and 65,000 rows against a register of about 290,000, and retrying harder was measured
+rather than assumed: best of four was 64,767 rows, best of twelve was 59,873. What is held is a
+front slice ordered by licence number, so it is biased to older licences rather than a sample.
+The by-classification route is the remaining option and its form does not yield to a
+server-side post.
 
 **Cal eProcure `.aspx` pages — empty shells.** The public pages are JavaScript wrappers
 carrying no data. The conclusion "a browser is required" was wrong: they wrap PeopleSoft
@@ -120,6 +146,21 @@ turn. Not yet implemented.
 
 **SCPRS supplier ids solve vendor identity** for state awards: a stable id per supplier,
 carried on every award row, which removes the need to match on names.
+
+**There are three identifier namespaces, and they do not meet.** SCPRS `supplier_id` keys
+state awards. PlanetBids issues its own `vendorId`, which deduplicates a vendor across that
+platform's agencies and stops at its edge — it is carried namespaced under its source key so
+it can never be read as a state supplier id. CSLB licence numbers are the only identifier
+that could bridge them, which is why the register matters more than its own contents suggest
+and why its download ceiling is a real loss rather than a missing nice-to-have. Vendor ads
+cite a licence in free text, so those are extracted.
+
+**Leveraged Procurement Agreements join on an identifier, not a name.** The LPA search
+publishes the same `supplier_id` the award registry carries, so statewide-contract standing
+attaches with no confidence ceiling and no ambiguity case — unlike every other vendor join
+here. Measured: 379 vehicles across 119 of 699 corpus suppliers, 378 currently in force. This
+also supplies the "presence on a statewide contract or purchasing vehicle" prediction
+feature, which had scored zero in every run because nothing populated it.
 
 **Bid-results pages carry no id**, so bidder names are resolved against SCPRS by exact
 normalised match. One query returns both the identity and that vendor's award history, so the
@@ -246,10 +287,24 @@ products; the README carries the rubric and wins where they conflict.
 
 ## 8. Open items
 
-1. A second SCPRS subdivision axis, so the award sweep stops losing two thirds of its rows.
-2. Vendor advertisements — the strongest forward-looking signal California exposes.
-3. SF subcontractor listings, which would populate the one profile dimension still empty.
-4. Predecessor search across every RFP in the evaluation set; it currently runs on the
+Closed since the first pass: the SCPRS subdivision axis (now two axes, taking the sweep from
+roughly a quarter of the portal's reported rows to 96.9%, with the residual measured rather
+than estimated); vendor advertisements, both boards, with bid-assistance ads flagged rather
+than counted as interest; and statewide contract vehicles.
+
+1. **Backfill twelve months.** The machinery is built — harvests resume rather than restart,
+   and an empty unit is distinguished from a failed one — but the backfill has not been run.
+   This is the only item with a clock on it: Caltrans keeps roughly nine months, so history
+   not collected is lost permanently rather than deferred.
+2. **A complete CSLB register**, which is the bridge between the three identifier namespaces.
+   Blocked on a server-side download ceiling; the by-classification route is unsolved.
+3. **PlanetBids document bytes.** Metadata, URLs, the login gate and the recalled flag are
+   harvested; the files themselves sit behind the same protection as the API and need the
+   browser transport.
+4. **Lineage and evidence-link validation** across the new sources — the least-started item
+   in the brief.
+5. SF subcontractor listings, which would populate the one profile dimension still empty.
+6. Predecessor search across every RFP in the evaluation set; it currently runs on the
    demonstrated event only.
-5. A solicitation-level evaluation set assembled from award-notice documents, and the
+7. A solicitation-level evaluation set assembled from award-notice documents, and the
    forward-window prediction target to replace the same-day one.

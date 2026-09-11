@@ -321,6 +321,30 @@ clause in `SECURITY.md`.
   of a field an agency draws from its own city, and Sacramento publishes it directly
   rather than leaving it to be inferred from bidder addresses.
 
+### University of California procurement
+
+- Endpoint we call: none — https://procurement.ucop.edu/suppliers/how-become-uc-supplier
+  is guidance, not a listing
+- Verified: 2026-09-10 (systemwide, Berkeley, UCLA; UCSF and the UCOP supplier page
+  refused the request)
+- **No systemwide public bid portal exists.** This is the asymmetry worth recording: CSU
+  runs one public Jaggaer portal covering all 23 campuses, and UC does not. Berkeley runs
+  Jaggaer as BearBuy, but that is an internal purchasing tool rather than a public bid
+  board. Covering UC would mean one adapter per campus, for solicitations only — none of
+  the campus routes checked publishes bidders.
+
+### San Bernardino County bid results
+
+- Endpoint we call: https://res.sbcounty.gov/project-management/bid-results/
+- Verified: 2026-09-11 — **unreachable, not unavailable.** Both county hosts refused the
+  connection on every attempt, as several county hosts did in the earlier survey. That is
+  a fact about this machine's route as much as about the county, so it is recorded as
+  unmeasured rather than written off.
+- **Why it is worth retrying from another network:** the county reportedly posts full
+  scanned bid tabulations listing every bid received, within three business days of
+  opening. That would be the highest-fidelity per-project bidder source surveyed. Scanned
+  PDFs would need the OCR path rather than native extraction.
+
 ## Dead ends, recorded so they are not retried
 
 ### Planholder search, advertised projects and addenda
