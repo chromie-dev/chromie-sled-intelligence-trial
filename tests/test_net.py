@@ -195,5 +195,35 @@ class CalEProcureStillWorksTests(unittest.TestCase):
         self.assertFalse(hasattr(HttpFetcher(delay_seconds=0), "post_action"))
 
 
+
+class SessionRecordingTests(unittest.TestCase):
+    """SECURITY.md says authenticated sessions are not recorded. It must be true."""
+
+    def _settings(self, **kwargs):
+        from unittest import mock
+
+        from sled_trial.net import browser
+        captured = {}
+
+        class _Sessions:
+            def create(self, **kw):
+                captured.update(kw)
+                return type("S", (), {"id": "s1", "connect_url": "ws://x"})()
+
+        client = type("C", (), {"sessions": _Sessions()})()
+        with mock.patch.object(browser, "_client", lambda: client):
+            browser.create_session(**kwargs)
+        return captured.get("browser_settings", {})
+
+    def test_recording_is_off_even_with_no_context(self) -> None:
+        # `auth` has a person type a password into whatever session is open, so the
+        # setting cannot be conditional on a saved context being present.
+        self.assertIs(self._settings()["recordSession"], False)
+
+    def test_recording_is_off_when_a_context_is_reused(self) -> None:
+        settings = self._settings(context_id="ctx-1", persist=True)
+        self.assertIs(settings["recordSession"], False)
+        self.assertEqual(settings["context"], {"id": "ctx-1", "persist": True})
+
 if __name__ == "__main__":
     unittest.main()

@@ -695,6 +695,19 @@ def cmd_planetbids(args: argparse.Namespace) -> int:
         return 1
     candidates, interest, summaries = [], [], []
 
+    # A context saved by `auth` is only worth saving if a harvest reads it. It did not:
+    # the operator signed in, the id was stored, and every later run opened a fresh
+    # anonymous browser and threw the login away.
+    store_path = _context_store(outdir)
+    saved_context = None
+    if store_path.exists():
+        try:
+            saved_context = json.loads(store_path.read_text()).get("planetbids")
+        except ValueError:
+            saved_context = None
+    if saved_context:
+        print(f"  reusing the saved PlanetBids context {saved_context[:8]}...")
+
     for cid in agencies:
         print(f"  agency {cid} {registry.get(cid, '')}")
         entry = pb.PORTAL.format(cid=cid)
@@ -705,6 +718,7 @@ def cmd_planetbids(args: argparse.Namespace) -> int:
             budget = 900 if args.max_bids is None else max(600, int(args.max_bids * 8))
             with PortalJsonReader(entry, delay_seconds=args.delay,
                                   remote=not args.local_browser,
+                                  context_id=saved_context,
                                   session_seconds=min(budget, 21600)) as reader:
                 out = pb.harvest_agency(reader.fetch_json, cid,
                                         max_bids=args.max_bids,
@@ -727,8 +741,21 @@ def cmd_planetbids(args: argparse.Namespace) -> int:
                          key=assemble.bidder_key)
     assemble.merge_cache(outdir, "planetbids_declared_interest.jsonl", interest,
                          key=assemble.bidder_key)
-    (outdir / "planetbids_coverage.json").write_text(
-        json.dumps({"agencies": summaries}, indent=1, default=str))
+    # Merged on company_id, not replaced. A later --agency run rewrote this file with
+    # only the portals it touched, so collected, reported and completeness silently
+    # dropped every agency harvested earlier -- the same shape as the cache wipe, in
+    # the file that is supposed to prove coverage.
+    existing = {}
+    coverage_path = outdir / "planetbids_coverage.json"
+    if coverage_path.exists():
+        try:
+            existing = {str(a.get("company_id")): a for a
+                        in (json.loads(coverage_path.read_text()).get("agencies") or [])}
+        except ValueError:
+            existing = {}
+    existing.update({str(a.get("company_id")): a for a in summaries})
+    coverage_path.write_text(
+        json.dumps({"agencies": list(existing.values())}, indent=1, default=str))
     print(f"\n{len(candidates)} bidder rows | {len(interest)} planholder rows "
           f"across {len(agencies)} agency portal(s)")
     return 0

@@ -25,7 +25,12 @@ class CoverageTests(unittest.TestCase):
             path.write_text(json.dumps(payload))
 
     def _coverage(self):
-        return assemble.unified_coverage(self.tmp, registry_csv="sources/source_registry.csv")
+        # The registry root is pointed at the temp dir too: a coverage report that
+        # reaches outside the directory it was asked about is not reproducible, and
+        # the CSLB entry used to do exactly that.
+        return assemble.unified_coverage(
+            self.tmp, registry_csv="sources/source_registry.csv",
+            registry_root=self.tmp / "registries")
 
     def test_every_registered_source_appears_even_if_never_run(self) -> None:
         cov = self._coverage()
@@ -98,6 +103,38 @@ class CoverageTests(unittest.TestCase):
         self.assertTrue(entry["known_gap"])
         self.assertTrue(entry["record_type"])
 
+
+
+class ZeroIsNotMissingTests(unittest.TestCase):
+    """A harvest that found nothing is not a portal that published no total."""
+
+    def test_a_real_zero_survives(self) -> None:
+        got = assemble._cov_planetbids(
+            {"agencies": [{"bids_collected": 0, "bids_reported_by_portal": 0}]}, 0)
+        self.assertEqual(got["collected"], 0)
+        self.assertEqual(got["reported"], 0)
+
+    def test_no_agencies_at_all_is_unknown_not_zero(self) -> None:
+        got = assemble._cov_planetbids({"agencies": []}, 0)
+        self.assertIsNone(got["collected"])
+        self.assertIsNone(got["reported"])
+
+
+class RegistryRootTests(unittest.TestCase):
+    """The register is written by `cslb`, not into --output."""
+
+    def test_the_register_is_found_wherever_output_points(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp) / "somewhere-else"
+            out.mkdir()
+            registries = pathlib.Path(tmp) / "registries"
+            registries.mkdir()
+            (registries / "cslb_license_master.csv").write_text("LicenseNo\n1\n")
+            cov = assemble.unified_coverage(out, registry_root=registries)
+            cslb = [s for s in cov["sources"]
+                    if s["source_key"] == "cslb_license_master"][0]
+        self.assertTrue(cslb["harvested"],
+                        "the register exists but coverage reported the source empty")
 
 if __name__ == "__main__":
     unittest.main()

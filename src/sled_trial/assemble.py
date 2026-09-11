@@ -499,6 +499,11 @@ class CoverageSource(NamedTuple):
     coverage_file: str | None
     caches: tuple[str, ...]
     reader: str            # name of the _cov_* function below
+    # True when `caches` live under the registry root rather than the build directory.
+    registry: bool = False
+
+
+DEFAULT_REGISTRY_ROOT = "data/raw/registries"
 
 
 COVERAGE_SOURCES = (
@@ -522,9 +527,17 @@ COVERAGE_SOURCES = (
                    ("vendor_ads_declared_interest.jsonl",), "_cov_vendor_ads"),
     CoverageSource("caleprocure_supplier_search", "supplier_locations_coverage.json",
                    ("supplier_locations.json",), "_cov_suppliers"),
+    # Absolute under the repo, not relative to --output. The register is written by
+    # `cslb` into data/raw/registries regardless of where analyze writes, so resolving
+    # it from outdir reported an empty source for any output directory but build/.
+    # Resolved against `registry_root`, not against --output. The register is written
+    # by `cslb` into data/raw/registries wherever analyze happens to write, so treating
+    # it as relative to outdir reported the source as empty for any output directory
+    # but build/ -- while cslb_coverage.json next to it still claimed tens of thousands
+    # of rows.
     CoverageSource("cslb_license_master", "cslb_coverage.json",
-                   ("../data/raw/registries/cslb_license_master.PARTIAL.csv",
-                    "../data/raw/registries/cslb_license_master.csv"), "_cov_cslb"),
+                   ("cslb_license_master.PARTIAL.csv",
+                    "cslb_license_master.csv"), "_cov_cslb", registry=True),
 )
 
 
@@ -542,8 +555,12 @@ def _cov_awards(cov: Any, rows: int) -> dict[str, Any]:
 
 def _cov_planetbids(cov: Any, rows: int) -> dict[str, Any]:
     agencies = (cov or {}).get("agencies", [])
-    return {"collected": sum(a.get("bids_collected") or 0 for a in agencies) or None,
-            "reported": sum(a.get("bids_reported_by_portal") or 0 for a in agencies) or None,
+    # `or None` turned a real zero into "the portal published no total", which is the
+    # absent-versus-zero confusion this whole report exists to avoid.
+    if not agencies:
+        return {"collected": None, "reported": None, "complete": None}
+    return {"collected": sum(a.get("bids_collected") or 0 for a in agencies),
+            "reported": sum(a.get("bids_reported_by_portal") or 0 for a in agencies),
             "complete": all(a.get("complete") for a in agencies) if agencies else None,
             "rows": rows,
             "failures": sum(len(a.get("failures") or []) for a in agencies),
@@ -635,7 +652,9 @@ def _count_rows(path: pathlib.Path) -> int:
 
 
 def unified_coverage(outdir: pathlib.Path,
-                     registry_csv: str = "sources/source_registry.csv") -> dict[str, Any]:
+                     registry_csv: str = "sources/source_registry.csv",
+                     registry_root: str | pathlib.Path = DEFAULT_REGISTRY_ROOT,
+                     ) -> dict[str, Any]:
     """One reconciled account of what the pipeline actually holds.
 
     Joins the static research in `source_registry.csv` -- portal, record type, historical
@@ -659,7 +678,8 @@ def unified_coverage(outdir: pathlib.Path,
                     cov = json.loads(path.read_text())
                 except Exception:
                     cov = None
-        caches = [outdir / c for c in source.caches]
+        root = pathlib.Path(registry_root) if source.registry else outdir
+        caches = [root / c for c in source.caches]
         rows = sum(_count_rows(c) for c in caches)
         # "Has this ever run?" is answered by evidence of a run -- a cache file or a
         # coverage report -- not by a row count. A harvest that legitimately found

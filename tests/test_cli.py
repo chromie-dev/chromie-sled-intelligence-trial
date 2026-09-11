@@ -437,6 +437,79 @@ class BidderSourceRegistryTests(unittest.TestCase):
         self.assertEqual(sf.record_source, "sfpublicworks_bid_tabulation")
         self.assertEqual(caltrans.record_source, "caleprocure_event_list")
 
+class PlanetBidsCoverageTests(unittest.TestCase):
+    def test_a_later_agency_run_does_not_drop_earlier_portals(self) -> None:
+        # The cache-wipe shape again, this time in the file that proves coverage: a
+        # --agency run replaced the whole report with the one portal it touched.
+        import argparse
+        from unittest import mock
+
+        from sled_trial.net import browser as browser_mod
+        from sled_trial.sources.ca import planetbids as pb
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            (out / "planetbids_coverage.json").write_text(json.dumps({"agencies": [
+                {"company_id": "14424", "bids_collected": 1025, "complete": True}]}))
+            harvest = lambda fetch, cid, **kw: {
+                "bids": [], "candidates": [], "declared_interest": [], "documents": [],
+                "company_id": cid, "bids_collected": 463, "complete": True}
+            with mock.patch.object(cli, "_session", lambda a: object()), \
+                    mock.patch.object(pb, "harvest_agency", harvest), \
+                    mock.patch.object(browser_mod, "PortalJsonReader", _StubReader):
+                cli.cmd_planetbids(argparse.Namespace(
+                    output=tmp, delay=0, browser_headers=False, agency=["39497"],
+                    max_bids=1, local_browser=False, documents=False))
+            agencies = json.loads(
+                (out / "planetbids_coverage.json").read_text())["agencies"]
+        ids = {str(a["company_id"]) for a in agencies}
+        self.assertEqual(ids, {"14424", "39497"},
+                         "a later run dropped the portals an earlier one measured")
+
+
+class _StubReader:
+    """Stands in for the hosted browser. Records what it was constructed with."""
+
+    last_kwargs: dict = {}
+
+    def __init__(self, entry, **kwargs):
+        type(self).last_kwargs = kwargs
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def fetch_json(self, url):
+        return {}
+
+
+class SavedContextTests(unittest.TestCase):
+    def test_planetbids_reuses_the_context_auth_saved(self) -> None:
+        # `auth` stores a context id and tells the operator later runs reuse it. No
+        # harvest read the store, so every run opened a fresh anonymous browser.
+        import argparse
+        from unittest import mock
+
+        from sled_trial.net import browser as browser_mod
+        from sled_trial.sources.ca import planetbids as pb
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            (out / "contexts.json").write_text(json.dumps({"planetbids": "ctx-abc123"}))
+            harvest = lambda fetch, cid, **kw: {
+                "bids": [], "candidates": [], "declared_interest": [], "documents": [],
+                "company_id": cid, "bids_collected": 0, "complete": True}
+            with mock.patch.object(cli, "_session", lambda a: object()), \
+                    mock.patch.object(pb, "harvest_agency", harvest), \
+                    mock.patch.object(browser_mod, "PortalJsonReader", _StubReader):
+                cli.cmd_planetbids(argparse.Namespace(
+                    output=tmp, delay=0, browser_headers=False, agency=["14424"],
+                    max_bids=1, local_browser=False, documents=False))
+        self.assertEqual(_StubReader.last_kwargs.get("context_id"), "ctx-abc123")
+
+
 class MonthWindowTests(unittest.TestCase):
     """A backfill is walked in calendar months so a stopped run is still describable."""
 

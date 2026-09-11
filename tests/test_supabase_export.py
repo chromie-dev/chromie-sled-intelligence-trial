@@ -323,6 +323,51 @@ class ParticipantRecordIntegrityTests(unittest.TestCase):
                 row = se.participant_rows([candidate], [])[0]
                 self.assertIn(row["record_id"], ids)
 
+    def test_a_planholder_stub_does_not_claim_the_company_bid(self) -> None:
+        # analyze passes observed bidders and declared interest into one helper, since
+        # they share the identity problem. They do not share the claim: labelling all
+        # of them observed_as_bidder put 25,090 companies in the competitive picture
+        # on the strength of having downloaded a document.
+        rows = se.observed_competitor_rows([
+            {"vendor_name_raw": "ACME", "event_id": "1",
+             "source_key": "planetbids_agency_portal",
+             "participation": "declared_interest"}])
+        activity = rows[0]["derived_profile"]
+        self.assertNotIn("observed_as_bidder", activity)
+        self.assertEqual(activity["declared_interest"], 1)
+
+    def test_an_observed_bidder_stub_still_says_it_bid(self) -> None:
+        rows = se.observed_competitor_rows([
+            {"vendor_name_raw": "ACME", "event_id": "1",
+             "source_key": "caltrans_bid_results"}])
+        self.assertEqual(rows[0]["derived_profile"]["observed_as_bidder"], 1)
+
+    def test_a_company_that_did_both_is_counted_as_both(self) -> None:
+        rows = se.observed_competitor_rows([
+            {"vendor_name_raw": "ACME", "event_id": "1",
+             "source_key": "caltrans_bid_results"},
+            {"vendor_name_raw": "ACME", "event_id": "2",
+             "source_key": "planetbids_agency_portal",
+             "participation": "declared_interest"}])
+        activity = rows[0]["derived_profile"]
+        self.assertEqual((activity["observed_as_bidder"], activity["declared_interest"]),
+                         (1, 1))
+
+    def test_a_city_record_does_not_claim_a_state_portal_url(self) -> None:
+        # An SF tabulation given a caleprocure.ca.gov locator asserts an official URL
+        # that resolves to nothing, while source_key on the same row says it is a city.
+        sf = {"business_unit": "SFPW", "event_id": "7165",
+              "vendor_name_raw": "Ronan Construction",
+              "source_key": "sfpublicworks_bid_tabulation",
+              "evidence_url": "https://sfpublicworks.org/bid/7165"}
+        row = se.event_record_rows([], participants=[sf])[0]
+        self.assertNotIn("caleprocure.ca.gov", str(row["canonical_url"]))
+        self.assertEqual(row["provenance"]["source_key"], "sfpublicworks_bid_tabulation")
+
+    def test_a_state_event_keeps_its_caleprocure_locator(self) -> None:
+        row = se.event_record_rows([{"business_unit": "2740", "event_id": "40075"}])[0]
+        self.assertIn("caleprocure.ca.gov", row["canonical_url"])
+
     def test_a_planholder_and_an_advertiser_are_different_states(self) -> None:
         # The brief asks the system to distinguish interested vendors, planholders,
         # respondents, bidders, awardees and incumbents. Collapsing the first two into

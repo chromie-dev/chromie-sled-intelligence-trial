@@ -148,11 +148,16 @@ def create_session(*, context_id: str | None = None, persist: bool = False,
     expired". Set it from how long the work will actually take.
     """
     kwargs: dict[str, Any] = {}
-    settings: dict[str, Any] = {}
+    # Never record. SECURITY.md states that authenticated sessions are not recorded
+    # because a login replay captures the password field keystroke by keystroke, and
+    # `auth` exists precisely to have a person type one. The setting was documented
+    # and never sent, so every session was recordable; it is unconditional rather
+    # than conditional on `context_id` because the operator can sign in on any
+    # session, not only one carrying a saved context.
+    settings: dict[str, Any] = {"recordSession": False}
     if context_id:
         settings["context"] = {"id": context_id, "persist": persist}
-    if settings:
-        kwargs["browser_settings"] = settings
+    kwargs["browser_settings"] = settings
     if session_seconds:
         kwargs["api_timeout"] = session_seconds
     session = _client().sessions.create(**kwargs)

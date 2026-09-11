@@ -371,10 +371,15 @@ def event_record_rows(events: Iterable[dict[str, Any]],
             "amount": None, "amount_raw": None,
             "category": event.get("event_type"),
             "competition_method": event.get("format"),
-            "canonical_url": (f"https://caleprocure.ca.gov/event/"
-                              f"{event.get('business_unit')}/{event.get('event_id')}"),
+            # Only a Cal eProcure event has a Cal eProcure locator. An SF tabulation
+            # given one claims an official state URL that resolves to nothing, while
+            # the source_key on the same row says it is a city record.
+            "canonical_url": (
+                f"https://caleprocure.ca.gov/event/"
+                f"{event.get('business_unit')}/{event.get('event_id')}"
+                if source == DEFAULT_RECORD_SOURCE else event.get("evidence_url")),
             "raw_provider_data": dict(event),
-            "provenance": {"source_key": "caleprocure_event_list",
+            "provenance": {"source_key": source,
                            "buyer_email": event.get("buyer_email")},
             "observed_at": _now(),
         })
@@ -442,6 +447,32 @@ def competitor_rows(profiles: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _stub_activity(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """What a stub profile can honestly claim, counted per evidence kind.
+
+    A bid is a bid; holding the package or posting an advertisement is not. These
+    arrive in the same list because they share the identity problem -- no state
+    supplier id -- not because they mean the same thing.
+    """
+    bid = [r for r in rows if not r.get("participation")]
+    declared = [r for r in rows if r.get("participation")]
+    activity: dict[str, Any] = {
+        "solicitations": sorted({str(r.get("event_id")) for r in rows
+                                 if r.get("event_id")}),
+    }
+    if bid:
+        activity["observed_as_bidder"] = len(bid)
+    if declared:
+        activity["declared_interest"] = len(declared)
+    activity["note"] = " ".join(filter(None, [
+        "observed bidding" if bid else "",
+        "declared interest without bidding" if declared and not bid else "",
+        "also declared interest elsewhere" if declared and bid else "",
+        "-- not matched to a state supplier id, so no award history is attached",
+    ])).strip()
+    return activity
+
+
 def observed_competitor_rows(observed: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """A competitor row for every vendor we watched bid but could not resolve.
 
@@ -491,13 +522,11 @@ def observed_competitor_rows(observed: Iterable[dict[str, Any]]) -> list[dict[st
             "public_identifiers": identifiers,
             "certifications": certifications,
             "profile_status": "stub",
-            "derived_profile": {
-                "observed_as_bidder": len(rows),
-                "solicitations": sorted({str(r.get("event_id")) for r in rows
-                                         if r.get("event_id")}),
-                "note": ("observed bidding but not matched to a state supplier id, so "
-                         "no award history is attached"),
-            },
+            # Counted by what each row actually evidences. Passing planholders through
+            # here labelled 25,090 companies as observed bidders on the strength of
+            # having downloaded a document -- the same inflation the participation
+            # roles exist to prevent, arriving through the competitor table instead.
+            "derived_profile": _stub_activity(rows),
             "identity_confidence": "unresolved",
             "observed_at": _now(),
         })
