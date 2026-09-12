@@ -225,18 +225,25 @@ by equating bids with wins.
 | 974 rows, 6-day window | 55 | 0.0727 | 0.0606 | ±0.0435 | 45 |
 | 1,252 rows, 7-day window | 64 | 0.0573 | 0.0625 | ±0.0308 | 53 |
 | 4,088 rows, 8-day window | 64 | 0.0625 | 0.0469 | ±0.0350 | 53 |
+| 250,986 rows, 12-month window | 110 | **0.1697** | 0.0939 | ±0.0488 | 70 |
 
-Three measurements of the same thing. The spread across them is 0.0154, inside every one of
-those intervals, and precision@5 moves the opposite way to precision@3 between the second and
-third. The third row beats its baseline where the second lost to it, on a corpus three times
-deeper — and that is still not a result, because 53 of 64 events score exactly zero and the
-interval swallows the difference. The evaluation cannot resolve whether the ranking beats
-counting past wins.
+The first three rows are the same measurement three times: their spread is 0.0154, inside
+every interval, and none of them can say whether the ranking beats counting past wins. The
+fourth row can. With twelve months of history under every vendor the gap to the best trivial
+baseline is 0.0758 against an interval of ±0.0488 — the model is distinguishable from
+popularity for the first time, at 1.8× the strongest baseline. That baseline also nearly
+doubled with the deeper corpus, so this is not the model improving against a fixed bar.
 
-The shipped headline is whatever the documented command produces with no flags, currently the
-8-day figure. Quoting a window chosen after seeing which scored best is the failure mode this
-table exists to prevent, and the second row is kept precisely because it is the one where the
-model lost.
+Two things stop it being a good result rather than a real one. 70 of 110 events still score
+exactly zero, so the ranking is measurably better than nothing and still misses most of the
+time. And the held-out set is 110 events rather than 64 because the cutoff day's own coverage
+improved with the backfill; it is the same unselected rule applied to a fuller day, not a
+paired comparison on identical events.
+
+The shipped headline is whatever the documented command produces with no flags, now the
+12-month figure. Quoting a window chosen after seeing which scored best is the failure mode
+this table exists to prevent, and the second row is kept precisely because it is the one where
+the model lost.
 
 An earlier figure of 0.17 was withdrawn for exactly that reason: it was measured on the ten
 held-out events with the deepest prior history, which are the most predictable. The unselected
@@ -326,12 +333,14 @@ Caltrans bidder history is also backfilled: 53 weeks, 2025-09-07 to 2026-09-06. 
 item with a clock on it, because the site keeps roughly nine months and uncollected history
 is lost rather than deferred. It is collected.
 
-1. **Twelve months of award history.** The bidder half of the backfill is done; the award
-   sweep still covers eight days. The machinery is ready — harvests resume rather than
-   restart, an empty unit is distinguished from a failed one, and rows checkpoint to disk per
-   slice so a killed run costs a slice — but at the observed rate a serial year is roughly 65
-   hours. Four sessions, each with its own PeopleSoft state chain, brings that to about 16.
-   This is the largest remaining gap between what was asked and what exists.
+1. ~~Twelve months of award history.~~ **Done.** 09/11/2025 to 09/10/2026, every one of
+   365 days answered: 252,665 unique awards across 25,078 suppliers and 157 departments,
+   246,362 of 270,919 portal-reported rows recovered (90.9%). The shortfall is 287 slices
+   still over the 200-row cap after both subdivision axes, almost all CAL FIRE and Caltrans on
+   busy days, each named in the per-month verdicts. A third axis (category) would recover
+   most of it and was not run. Collected month by month, four months in flight at once from a
+   single client at the same 1.5s per-request delay, so the portal saw one polite reader
+   rather than a distributed one.
 2. **A complete CSLB register**, the bridge between the three identifier namespaces. Blocked
    on a server-side download ceiling at 59,873 of roughly 290,000 rows; the by-classification
    route is unsolved. Nothing yet reads the register even for the rows we hold, so the
@@ -343,8 +352,8 @@ is lost rather than deferred. It is collected.
    lineage still only understands the state surfaces.
 5. SF subcontractor listings, which would populate the one profile dimension still empty.
 6. Predecessor search across every RFP in the evaluation set; it currently runs on the
-   demonstrated event only. Worth doing after item 1 rather than before — lineage searches
-   the award corpus, and on eight days of history it would find almost nothing.
+   demonstrated event only. Now worth doing: lineage searches the award corpus, and with
+   twelve months behind it a search can actually find something.
 7. A solicitation-level evaluation set assembled from award-notice documents, and the
    forward-window prediction target to replace the same-day one.
 8. **Respondents and incumbents.** Four of the brief's six participation states are exported

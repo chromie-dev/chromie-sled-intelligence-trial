@@ -22,6 +22,7 @@ names stay unmatched rather than being fuzzily merged.
 from __future__ import annotations
 
 import collections
+import bisect
 import csv
 import io
 import re
@@ -135,6 +136,54 @@ def normalize_vendor(name: str) -> str:
     """Comparison key only. Never replaces a canonical name."""
     text = _PUNCT.sub(" ", (name or "").upper())
     return _WS.sub(" ", text).strip()
+
+
+class SpendingLookup:
+    """Narrow the payee index to the few names `match_confidence` could accept.
+
+    `attach_spending` asked the matcher about every (profile, payee) pair. At 1,739
+    profiles that was 22 million calls and took seconds; at 25,078 profiles on the
+    twelve-month corpus it was 316 million and would have taken the afternoon. The
+    matcher has three tiers and each is answerable by lookup: an exact normalised name is
+    a dict hit, a truncated payee that prefixes our name is one dict hit per prefix
+    length, and our own truncated name prefixing a payee is a contiguous range in sorted
+    order. This finds those candidates and then asks `match_confidence` about only them.
+    The matcher stays the oracle; this only decides who it is asked about.
+    """
+
+    def __init__(self, spending: dict[str, Any]) -> None:
+        self.spending = spending
+        # Original dict order, so ties downstream resolve exactly as they always did.
+        self.order = {key: i for i, key in enumerate(spending)}
+        self.by_norm: dict[str, list[str]] = collections.defaultdict(list)
+        self.truncated_by_norm: dict[str, list[str]] = collections.defaultdict(list)
+        for key in spending:
+            norm = normalize_vendor(key)
+            if not norm:
+                continue                    # the matcher refuses an empty name
+            self.by_norm[norm].append(key)
+            if len((key or "").strip()) >= TRUNCATION_LENGTH:
+                self.truncated_by_norm[norm].append(key)
+        self.sorted_norms = sorted(self.by_norm)
+
+    def candidates(self, scprs_name: str) -> list[tuple[str, str, dict[str, Any]]]:
+        a = normalize_vendor(scprs_name)
+        if not a:
+            return []
+        keys: set[str] = set(self.by_norm.get(a, ()))
+        for length in range(1, len(a)):
+            keys.update(self.truncated_by_norm.get(a[:length], ()))
+        if len((scprs_name or "").strip()) >= TRUNCATION_LENGTH:
+            lo = bisect.bisect_left(self.sorted_norms, a)
+            hi = bisect.bisect_left(self.sorted_norms, a + "\uffff")
+            for norm in self.sorted_norms[lo:hi]:
+                keys.update(self.by_norm[norm])
+        out = []
+        for key in sorted(keys, key=self.order.__getitem__):
+            ok, confidence, basis = match_confidence(scprs_name, key)
+            if ok:
+                out.append((confidence, basis, self.spending[key]))
+        return out
 
 
 def parse_transactions(data: bytes) -> Iterable[dict[str, str]]:

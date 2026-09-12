@@ -282,14 +282,14 @@ def attach_spending(profiles: list[dict[str, Any]],
     """
     from .sources.ca import openfiscal
 
+    # Index once, then ask the matcher about a handful of payees per profile instead of
+    # all 12,612. The pairwise version was 316 million matcher calls on the twelve-month
+    # corpus -- invisible at 1,739 profiles, the whole afternoon at 25,078.
+    lookup = openfiscal.SpendingLookup(spending)
     matched = ambiguous = 0
     for profile in profiles:
         canonical = profile.get("canonical_name") or ""
-        candidates = []
-        for key, entry in spending.items():
-            ok, confidence, basis = openfiscal.match_confidence(canonical, key)
-            if ok:
-                candidates.append((confidence, basis, entry))
+        candidates = lookup.candidates(canonical)
         if not candidates:
             profile["spending"] = {
                 "matched": False,
@@ -375,12 +375,18 @@ def attach_location(profiles: list[dict[str, Any]],
     prefix matching is not used here, because "AVIATE" alone matches two different companies
     at different Sacramento addresses.
     """
+    # Normalise each registry name once. Doing it inside the profile loop normalised
+    # every (profile, entry) pair -- the same shape as the spending join, smaller only
+    # because this registry is.
+    by_key: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
+    for name, row in locations.items():
+        if row.get("has_location"):
+            by_key[normalize_name(name)].append(row)
     matched = ambiguous = 0
     for profile in profiles:
         canonical = (profile.get("canonical_name") or "").strip()
         key = normalize_name(canonical)
-        candidates = [row for name, row in locations.items()
-                      if normalize_name(name) == key and row.get("has_location")]
+        candidates = by_key.get(key, [])
         if not candidates:
             profile["location"] = {
                 "matched": False,

@@ -193,6 +193,51 @@ class AttachTests(unittest.TestCase):
         self.assertIn("no match here can be high confidence", summary["join_basis"])
 
 
+
+class SpendingLookupTests(unittest.TestCase):
+    """The index narrows; match_confidence still decides. Brute force is the oracle."""
+
+    NAMES = [
+        "AVIATE ENTERPRISES INC", "AVIATE ENTERPRISES, INC.", "ACME WIDGETS INC", "ACME",
+        "WESTERN STATES COUNCIL OF", "WESTERN STATES COUNCIL OF CARPENTERS",
+        "STATE BLDG & CONST TRADES COUNCIL OF CALIFORNIA", "STATE BLDG & CONST TRADES",
+        "BETA SERVICES", "", "   ", "ALBERTSONS", "ALBERTSONS LLC",
+        "PACIFIC GAS AND ELECTRIC COMPANY", "PACIFIC GAS AND ELECTRIC",
+    ]
+
+    def _spending(self):
+        return {n: {"vendor_name_raw": n, "i": i} for i, n in enumerate(self.NAMES) if n.strip()}
+
+    def _brute(self, spending, scprs_name):
+        out = []
+        for key, entry in spending.items():
+            ok, conf, basis = of.match_confidence(scprs_name, key)
+            if ok:
+                out.append((conf, basis, entry))
+        return out
+
+    def test_matches_brute_force_on_every_tier_including_order(self) -> None:
+        # Exact, payee-truncated prefix, our-name-truncated prefix, empty, and misses.
+        spending = self._spending()
+        lookup = of.SpendingLookup(spending)
+        for query in self.NAMES + ["WESTERN STATES COUNCIL OF CARPENTERS AND JOINERS",
+                                    "PACIFIC GAS", "AVIATE", "STATE BLDG & CONST TRADES CO"]:
+            with self.subTest(query=query):
+                self.assertEqual(lookup.candidates(query), self._brute(spending, query))
+
+    def test_the_matcher_is_asked_about_a_handful_not_everyone(self) -> None:
+        # The bug this replaces: 25,078 profiles x 12,612 payees = 316 million calls.
+        from unittest import mock
+        spending = {f"PAYEE NUMBER {i:05d} INCORPORATED": {"vendor_name_raw": f"P{i}"}
+                    for i in range(5000)}
+        spending["ACME WIDGETS INC"] = {"vendor_name_raw": "ACME WIDGETS INC"}
+        lookup = of.SpendingLookup(spending)
+        with mock.patch.object(of, "match_confidence", wraps=of.match_confidence) as m:
+            found = lookup.candidates("ACME WIDGETS INC")
+        self.assertEqual(len(found), 1)
+        self.assertLess(m.call_count, 50,
+                        f"asked the matcher {m.call_count} times to place one name")
+
 if __name__ == "__main__":
     unittest.main()
 

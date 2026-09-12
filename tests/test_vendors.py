@@ -169,6 +169,45 @@ class ConflictTests(unittest.TestCase):
                             for r in review))
 
 
+
+class AttachSpendingScaleTests(unittest.TestCase):
+    def test_the_matcher_is_not_called_per_pair(self) -> None:
+        # 25,078 profiles x 12,612 payees = 316 million matcher calls on the real corpus.
+        from unittest import mock
+
+        from sled_trial import vendors
+        from sled_trial.sources.ca import openfiscal as of
+        profiles = [{"supplier_id": f"S{i}", "canonical_name": f"VENDOR {i} INC"}
+                    for i in range(300)]
+        spending = {f"PAYEE {j} INC": {"vendor_name_raw": f"PAYEE {j} INC",
+                                       "truncated_name": False, "total": 1.0,
+                                       "departments": [], "first_date": None,
+                                       "last_date": None, "rows": 1}
+                    for j in range(200)}
+        with mock.patch.object(of, "match_confidence", wraps=of.match_confidence) as m:
+            vendors.attach_spending(profiles, spending)
+        self.assertLess(m.call_count, 300 * 10,
+                        f"{m.call_count} matcher calls for 300 profiles x 200 payees")
+
+
+class AttachLocationScaleTests(unittest.TestCase):
+    def test_each_side_is_normalised_once_not_per_pair(self) -> None:
+        # The location join normalised every registry name once per profile. 300 x 200
+        # here; 25,078 x 152 on the real corpus.
+        from unittest import mock
+
+        from sled_trial import vendors
+        profiles = [{"supplier_id": f"S{i}", "canonical_name": f"VENDOR {i}"}
+                    for i in range(300)]
+        locations = {f"OTHER {j}": {"has_location": True,
+                                    "location": {"city": "X", "postal": "1"}}
+                     for j in range(200)}
+        with mock.patch.object(vendors, "normalize_name",
+                               wraps=vendors.normalize_name) as m:
+            vendors.attach_location(profiles, locations)
+        self.assertLess(m.call_count, 300 + 200 + 10,
+                        f"{m.call_count} normalisations for 300 profiles x 200 entries")
+
 if __name__ == "__main__":
     unittest.main()
 
