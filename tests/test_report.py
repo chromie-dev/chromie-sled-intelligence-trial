@@ -99,6 +99,45 @@ class GeneratedProseTests(unittest.TestCase):
             with mock.patch.object(report, "BUILD", out):
                 return report.generate()
 
+    def _report_with_corpus(self, median, span, rows, backfill):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            (out / "evaluation.json").write_text(json.dumps({
+                "precision_at_3": 0.17, "precision_at_5": 0.12, "coverage": 0.28,
+                "corpus": {"awards_per_vendor_median": median,
+                           "observation_span_days_max": span},
+                "baseline_comparison": {"history_rows": rows,
+                                        "best_baseline_precision_at_3": 0.09,
+                                        "lift_over_best_baseline": 1.8}}))
+            (out / "awards_backfill_coverage.jsonl").write_text(
+                "".join(json.dumps(b) + "\n" for b in backfill))
+            with mock.patch.object(report, "BUILD", out):
+                return report.generate()
+
+    def test_history_depth_is_computed_from_the_corpus(self) -> None:
+        # Said the cap left vendors "a handful of prior awards". On twelve months the
+        # cap costs under a tenth of rows and the median vendor still holds one.
+        text = self._report_with_corpus(1, 356, 250986, [
+            {"measured_this_run": {"collected": 100, "reported": 110}},
+            {"measured_this_run": {"collected": 900, "reported": 990}}])
+        self.assertIn("356-day window of 250,986 awards", text)
+        self.assertIn("median vendor", text)
+        self.assertIn("holds 1;", text)
+        self.assertIn("costs 9.1%", text)
+
+    def test_the_old_cap_explanation_is_gone(self) -> None:
+        text = self._report_with_corpus(1, 356, 250986, [])
+        for stale in ("handful of prior awards", "Most days exceed the", "History depth is capped"):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, text)
+
+    def test_no_corpus_yet_still_renders_without_inventing_numbers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(report, "BUILD", pathlib.Path(tmp)):
+                text = report.generate()
+        self.assertIn("Per-vendor history is thin", text)
+        self.assertNotIn("-day window of", text)
+
     def test_the_caveat_states_the_gap_this_run_measured(self) -> None:
         text = self._report(0.0625, 0.0469)
         self.assertIn("0.0156", text)

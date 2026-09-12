@@ -29,6 +29,40 @@ def _money(value: Any) -> str:
     return "not stated" if value is None else f"${value:,.2f}"
 
 
+def _history_depth(evaluation: dict[str, Any], backfill: list[dict[str, Any]]) -> list[str]:
+    """Why per-vendor history is thin, said from the corpus rather than from memory.
+
+    This paragraph blamed the 200-row grid cap for vendors carrying "only a handful of
+    prior awards". True on an eight-day window; false on a twelve-month one, where the
+    cap costs under a tenth of rows and the median vendor still holds one award --
+    because most suppliers appear once in a year of state purchasing. A literal claim
+    outlived its corpus, so the claim is now computed.
+    """
+    corpus = evaluation.get("corpus") or {}
+    median = corpus.get("awards_per_vendor_median")
+    span = corpus.get("observation_span_days_max")
+    rows = (evaluation.get("baseline_comparison") or {}).get("history_rows")
+    measured = [b.get("measured_this_run") or {} for b in backfill]
+    collected = sum(int(m.get("collected") or 0) for m in measured)
+    reported = sum(int(m.get("reported") or 0) for m in measured)
+
+    lines = ["1. **Per-vendor history is thin even when the window is not.**"]
+    if median is not None and span and rows:
+        lines[0] += (f" Over a {int(span)}-day window of {int(rows):,} awards the median vendor")
+        lines.append(f"   holds {median:g}; most suppliers appear once in a year of state purchasing,")
+        lines.append("   so a long tail of single-award vendors is the corpus, not an artefact of")
+        lines.append("   how it was collected.")
+    else:
+        lines.append("   Most suppliers appear once, so the median vendor carries little history")
+        lines.append("   whatever the window.")
+    if reported:
+        lines.append(f"   The 200-row grid cap costs {1 - collected / reported:.1%} of portal-reported rows")
+        lines.append("   after two subdivision axes, named per slice in awards_backfill_coverage.jsonl.")
+    else:
+        lines.append("   The 200-row grid cap's residual, where measured, is in awards_coverage.json.")
+    return lines
+
+
 def _gap(model: float | None, baseline: float | None) -> str:
     """The distance between model and baseline, for prose that must not go stale."""
     if model is None or baseline is None:
@@ -201,9 +235,8 @@ def generate() -> str:
     w("These are weak numbers and are reported unadjusted. Two structural causes, both about")
     w("the data rather than the ranking:")
     w("")
-    w("1. **History depth is capped.** The award search returns at most 200 rows and cannot")
-    w("   be paged, so history has to be assembled by slicing dates. Most days exceed the")
-    w("   cap, so each vendor carries only a handful of prior awards.")
+    for line in _history_depth(evaluation, _jsonl("awards_backfill_coverage.jsonl")):
+        w(line)
     w("2. **The ground truth is purchase-level, not solicitation-level.** Award rows are")
     w("   often small commodity orders filled by whoever already holds a statewide vehicle.")
     w("   Predicting that is a materially different question from predicting who will bid on")
