@@ -20,7 +20,7 @@ That is the finding the work turned on:
 
 | Surface | What it gives | Scale |
 | --- | --- | --- |
-| PlanetBids agency portals | Every respondent with amount and certifications, **plus planholders**, keyed by a stable platform vendor id | 1,845 bidders and 25,090 planholders over 3 agencies; 1,269 and 10,538 distinct vendors |
+| PlanetBids agency portals | Every respondent with amount and certifications, **plus planholders**, keyed by a stable platform vendor id, each carrying its solicitation's due date | 1,845 bidders and 24,987 planholders over 3 agencies spanning 46 months (Nov 2022 – Sep 2026); 1,269 and 10,538 distinct vendors |
 | Caltrans weekly bid results | Every bidder, ranked, with amount and Small Business status | 836 observations over 53 weeks (2025-09-07 to 2026-09-06) |
 | SF Public Works tabulations | Every bidder, local-business status, price, **engineer's estimate** | 21 observations |
 | Award-notice PDFs on Cal eProcure events | The awardee and the winning amount | 1 observation |
