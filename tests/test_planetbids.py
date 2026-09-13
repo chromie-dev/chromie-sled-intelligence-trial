@@ -276,7 +276,9 @@ class CommandTests(unittest.TestCase):
             written = {p.name for p in pathlib.Path(tmp).iterdir()}
             self.assertEqual(written, {"planetbids_bidders.jsonl",
                                        "planetbids_declared_interest.jsonl",
-                                       "planetbids_coverage.json"})
+                                       "planetbids_coverage.json",
+                                       # The solicitation list, which carries the dates.
+                                       "planetbids_bids.jsonl"})
 
     def test_a_subset_run_keeps_the_other_agencies_rows(self) -> None:
         # Running one agency must add to the cache, not replace the two harvested before.
@@ -386,6 +388,49 @@ class DocumentTests(unittest.TestCase):
         self.assertIsNone(pb.document_url("host/dir/", None))
         self.assertIsNone(pb.document_url(None, "file.pdf"))
 
+
+
+class SolicitationDateTests(unittest.TestCase):
+    """A bidder row must say when its solicitation was due.
+
+    The dates were parsed on every run and discarded: rows kept only the portal and bid
+    id, so the corpus could not say how many months of bidder history it held.
+    """
+
+    def _bid(self):
+        return pb.parse_bids(BIDS)[0]
+
+    def test_a_bidder_row_carries_its_solicitations_dates(self) -> None:
+        row = pb.bidder_candidates(self._bid(), pb.parse_responses(RESPONSES), cid=14424)[0]
+        self.assertEqual(row["due_date"], "2025-01-10 17:00:00.000")
+        self.assertEqual(row["issue_date"], "2024-12-06 14:24:00.000")
+        self.assertEqual(row["stage"], "Awarded")
+        self.assertIn("Energy Efficiency", row["solicitation_title"])
+
+    def test_a_planholder_row_carries_them_too(self) -> None:
+        row = pb.declared_interest_rows(
+            self._bid(), pb.parse_prospective_bidders(PROSPECTIVE), cid=14424)[0]
+        self.assertEqual(row["due_date"], "2025-01-10 17:00:00.000")
+
+    def test_dates_join_onto_rows_collected_before_rows_carried_them(self) -> None:
+        old = [{"business_unit": "PB14424", "event_id": "124517", "vendor_name_raw": "A"},
+               {"business_unit": "PB14424", "event_id": "999999", "vendor_name_raw": "B"},
+               {"business_unit": "PB39497", "event_id": "124517", "vendor_name_raw": "C"}]
+        dated, joined = pb.attach_bid_dates(old, pb.parse_bids(BIDS))
+        self.assertEqual(joined, 1, "only the row whose (portal, bid) is known")
+        self.assertEqual(len(dated), 3, "a row with no match is kept, never dropped")
+        self.assertEqual(dated[0]["due_date"], "2025-01-10 17:00:00.000")
+        self.assertNotIn("due_date", dated[1])
+        self.assertNotIn("due_date", dated[2], "same bid id on another portal is not a match")
+
+    def test_list_bids_pages_and_reports_the_portal_total(self) -> None:
+        calls = []
+        def fetch(url):
+            calls.append(url); return BIDS
+        bids, reported = pb.list_bids(fetch, 14424)
+        self.assertEqual(reported, 1025)
+        self.assertEqual([b["bid_id"] for b in bids], [124517, 124600])
+        self.assertEqual(len(calls), 1, "a short page ends the walk")
 
 if __name__ == "__main__":
     unittest.main()

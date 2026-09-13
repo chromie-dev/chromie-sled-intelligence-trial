@@ -253,6 +253,7 @@ def bidder_candidates(bid: dict[str, Any], responses: Iterable[dict[str, Any]],
         rows.append({
             "business_unit": f"PB{cid}",
             "event_id": str(bid["bid_id"]),
+            **_bid_fields(bid),
             "vendor_name_raw": r["vendor_name"],
             "vendor_id": r["vendor_id"],
             "rank": r["rank"],
@@ -279,6 +280,7 @@ def declared_interest_rows(bid: dict[str, Any], planholders: Iterable[dict[str, 
     return [{
         "business_unit": f"PB{cid}",
         "event_id": str(bid["bid_id"]),
+        **_bid_fields(bid),
         "vendor_name_raw": p["vendor_name"],
         "vendor_id": p["vendor_id"],
         "participation": "declared_interest",
@@ -289,15 +291,14 @@ def declared_interest_rows(bid: dict[str, Any], planholders: Iterable[dict[str, 
     } for p in planholders]
 
 
-def harvest_agency(fetch_json: Callable[[str], Any], cid: int | str, *,
-                   max_bids: int | None = None,
-                   stages: tuple[int, ...] = CLOSED_STAGES,
-                   on_progress: Callable[[str], None] | None = None) -> dict[str, Any]:
-    """Walk one agency portal and return its solicitations, bidders and planholders.
+def list_bids(fetch_json: Callable[[str], Any], cid: int | str, *,
+              on_progress: Callable[[str], None] | None = None,
+              ) -> tuple[list[dict[str, Any]], int]:
+    """Every solicitation on one portal, paged. Returns (bids, portal_reported_total).
 
-    `fetch_json` performs the request; this module never does. A bid whose fetch fails is
-    recorded as a typed failure rather than dropped, because a silently missing
-    solicitation is indistinguishable from one with no bidders.
+    Cheap -- about a hundred requests for three portals -- where the per-bid bidder
+    and planholder calls are the expensive part. Split out so the solicitation list,
+    which carries the dates, can be refreshed without redoing those.
     """
     say = on_progress or (lambda _msg: None)
     bids: list[dict[str, Any]] = []
@@ -312,6 +313,50 @@ def harvest_agency(fetch_json: Callable[[str], Any], cid: int | str, *,
         if len(chunk) < PAGE_SIZE or (pages and page >= pages):
             break
         page += 1
+    return bids, reported
+
+
+# What a bidder or planholder row carries about the solicitation it sits on. These were
+# fetched on every run and discarded: rows kept only the portal and bid id, so the
+# corpus could not say how many months of bidder history it held.
+BID_FIELDS = ("solicitation_title", "issue_date", "due_date", "stage")
+
+
+def _bid_fields(bid: dict[str, Any]) -> dict[str, Any]:
+    return {"solicitation_title": bid.get("title"), "issue_date": bid.get("issue_date"),
+            "due_date": bid.get("due_date"), "stage": bid.get("stage")}
+
+
+def attach_bid_dates(rows: Iterable[dict[str, Any]], bids: Iterable[dict[str, Any]],
+                     ) -> tuple[list[dict[str, Any]], int]:
+    """Join solicitation dates onto rows collected before the rows carried them.
+
+    Keyed on (portal, bid id), which every row already has. A row whose solicitation
+    is not in `bids` is returned as it was -- never dropped, never guessed.
+    """
+    by_key = {(f"PB{b.get('company_id')}", str(b.get("bid_id"))): b for b in bids}
+    out, joined = [], 0
+    for row in rows:
+        bid = by_key.get((row.get("business_unit"), str(row.get("event_id"))))
+        if bid is not None:
+            row = {**row, **_bid_fields(bid)}
+            joined += 1
+        out.append(row)
+    return out, joined
+
+
+def harvest_agency(fetch_json: Callable[[str], Any], cid: int | str, *,
+                   max_bids: int | None = None,
+                   stages: tuple[int, ...] = CLOSED_STAGES,
+                   on_progress: Callable[[str], None] | None = None) -> dict[str, Any]:
+    """Walk one agency portal and return its solicitations, bidders and planholders.
+
+    `fetch_json` performs the request; this module never does. A bid whose fetch fails is
+    recorded as a typed failure rather than dropped, because a silently missing
+    solicitation is indistinguishable from one with no bidders.
+    """
+    say = on_progress or (lambda _msg: None)
+    bids, reported = list_bids(fetch_json, cid, on_progress=say)
 
     wanted = [b for b in bids if b["stage_id"] in stages]
     if max_bids is not None:

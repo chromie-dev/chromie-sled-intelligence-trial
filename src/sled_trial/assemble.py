@@ -125,6 +125,11 @@ DECLARED_INTEREST_CACHES = ("planetbids_declared_interest.jsonl",
                             "vendor_ads_declared_interest.jsonl")
 
 
+def planetbids_bid_key(bid: dict[str, Any]) -> tuple[str, str]:
+    """Identity of one PlanetBids solicitation: the portal plus its bid id."""
+    return (str(bid.get("company_id")), str(bid.get("bid_id")))
+
+
 def declared_interest_key(row: dict[str, Any]) -> tuple[Any, Any, Any, Any]:
     """Identity of one declared-interest row.
 

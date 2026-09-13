@@ -693,7 +693,8 @@ def cmd_planetbids(args: argparse.Namespace) -> int:
     if not agencies:
         print("  no agencies: pass --agency or populate sources/planetbids/agencies.csv")
         return 1
-    candidates, interest, summaries = [], [], []
+    bids_only = getattr(args, "bids_only", False)
+    candidates, interest, summaries, bids_all = [], [], [], []
 
     # A context saved by `auth` is only worth saving if a harvest reads it. It did not:
     # the operator signed in, the id was stored, and every later run opened a fresh
@@ -720,9 +721,20 @@ def cmd_planetbids(args: argparse.Namespace) -> int:
                                   remote=not args.local_browser,
                                   context_id=saved_context,
                                   session_seconds=min(budget, 21600)) as reader:
-                out = pb.harvest_agency(reader.fetch_json, cid,
-                                        max_bids=args.max_bids,
-                                        on_progress=lambda m: print(f"        {m}"))
+                if bids_only:
+                    # The solicitation list alone: cheap, and it is where the dates
+                    # live. Existing bidder and planholder rows get them joined on
+                    # below rather than being fetched again.
+                    bids, reported = pb.list_bids(
+                        reader.fetch_json, cid, on_progress=lambda m: print(f"        {m}"))
+                    out = {"company_id": cid, "bids": bids, "candidates": [],
+                           "declared_interest": [], "bids_collected": len(bids),
+                           "bids_reported_by_portal": reported,
+                           "complete": len(bids) >= reported, "failures": [], "absent": []}
+                else:
+                    out = pb.harvest_agency(reader.fetch_json, cid,
+                                            max_bids=args.max_bids,
+                                            on_progress=lambda m: print(f"        {m}"))
         except Exception as exc:
             print(f"        FAILED: {type(exc).__name__}: {exc}")
             summaries.append({"company_id": cid, "error":
@@ -730,6 +742,9 @@ def cmd_planetbids(args: argparse.Namespace) -> int:
             continue
         candidates += out["candidates"]
         interest += out["declared_interest"]
+        bids_all += out["bids"]
+        if bids_only:
+            continue        # a list-only pass must not overwrite a full harvest's verdict
         summaries.append({k: v for k, v in out.items()
                           if k not in ("bids", "candidates", "declared_interest",
                                        "documents")})
@@ -737,6 +752,20 @@ def cmd_planetbids(args: argparse.Namespace) -> int:
             print(f"        WARNING: collected {out['bids_collected']} of "
                   f"{out['bids_reported_by_portal']} solicitations the portal reported")
 
+    # The solicitation list is a corpus in its own right, and the only place the dates
+    # live. It was fetched on every run and never written.
+    bids_all = assemble.merge_cache(outdir, "planetbids_bids.jsonl", bids_all,
+                                    key=assemble.planetbids_bid_key)
+    if bids_only:
+        # Join dates onto rows collected before rows carried them. Same key, so the
+        # merge replaces each row with its own dated copy and drops nothing.
+        for cache in ("planetbids_bidders.jsonl", "planetbids_declared_interest.jsonl"):
+            rows = assemble._read_jsonl(outdir / cache)
+            dated, joined = pb.attach_bid_dates(rows, bids_all)
+            assemble.merge_cache(outdir, cache, dated, key=assemble.bidder_key)
+            print(f"  {cache}: {joined} of {len(rows)} rows now carry their "
+                  f"solicitation's dates")
+        return 0
     assemble.merge_cache(outdir, "planetbids_bidders.jsonl", candidates,
                          key=assemble.bidder_key)
     assemble.merge_cache(outdir, "planetbids_declared_interest.jsonl", interest,
@@ -1307,6 +1336,9 @@ def build_parser() -> argparse.ArgumentParser:
                           "sources/planetbids/agencies.csv")
     pbx.add_argument("--max-bids", type=int, default=None,
                      help="cap solicitations per agency (default: all closed ones)")
+    pbx.add_argument("--bids-only", action="store_true",
+                     help="refresh only the solicitation lists and join their "
+                          "dates onto bidder rows already collected")
     pbx.add_argument("--local-browser", action="store_true",
                      help="use local Chrome instead of a hosted session")
 

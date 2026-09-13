@@ -485,6 +485,52 @@ class _StubReader:
         return {}
 
 
+class BidsOnlyRefreshTests(unittest.TestCase):
+    """--bids-only refreshes the solicitation list and dates existing rows in place."""
+
+    def test_existing_rows_gain_dates_and_nothing_is_dropped_or_overwritten(self) -> None:
+        import argparse
+        from unittest import mock
+
+        from sled_trial import documents
+        from sled_trial.net import browser as browser_mod
+        from sled_trial.sources.ca import planetbids as pb
+        from test_planetbids import BIDS
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            documents.write_jsonl([
+                {"business_unit": "PB14424", "event_id": "124517", "vendor_name_raw": "ACME"},
+                {"business_unit": "PB14424", "event_id": "555", "vendor_name_raw": "OLD CO"},
+            ], out / "planetbids_bidders.jsonl")
+            documents.write_jsonl([
+                {"business_unit": "PB14424", "event_id": "124517", "vendor_name_raw": "HOLDER"},
+            ], out / "planetbids_declared_interest.jsonl")
+            (out / "planetbids_coverage.json").write_text(json.dumps(
+                {"agencies": [{"company_id": "14424", "bids_collected": 1025,
+                               "sentinel": "from the full harvest"}]}))
+            with mock.patch.object(cli, "_session", lambda a: object()), \
+                    mock.patch.object(browser_mod, "PortalJsonReader", _StubReader), \
+                    mock.patch.object(pb, "list_bids",
+                                      lambda fetch, cid, on_progress=None: (pb.parse_bids(BIDS), 1025)):
+                code = cli.cmd_planetbids(argparse.Namespace(
+                    output=tmp, delay=0, browser_headers=False, agency=["14424"],
+                    max_bids=None, local_browser=False, documents=False, bids_only=True))
+            self.assertEqual(code, 0)
+            bidders = [json.loads(l) for l in (out / "planetbids_bidders.jsonl").read_text().splitlines() if l.strip()]
+            holders = [json.loads(l) for l in (out / "planetbids_declared_interest.jsonl").read_text().splitlines() if l.strip()]
+            bids = [json.loads(l) for l in (out / "planetbids_bids.jsonl").read_text().splitlines() if l.strip()]
+            cov = json.loads((out / "planetbids_coverage.json").read_text())
+        by_event = {b["event_id"]: b for b in bidders}
+        self.assertEqual(len(bidders), 2, "a bids-only pass dropped a bidder row")
+        self.assertEqual(by_event["124517"]["due_date"], "2025-01-10 17:00:00.000")
+        self.assertNotIn("due_date", by_event["555"], "an unknown solicitation was guessed")
+        self.assertEqual(holders[0]["due_date"], "2025-01-10 17:00:00.000")
+        self.assertEqual({b["bid_id"] for b in bids}, {124517, 124600})
+        self.assertEqual(cov["agencies"][0]["sentinel"], "from the full harvest",
+                         "a list-only pass overwrote the full harvest's coverage")
+
+
 class SavedContextTests(unittest.TestCase):
     def test_planetbids_reuses_the_context_auth_saved(self) -> None:
         # `auth` stores a context id and tells the operator later runs reuse it. No
