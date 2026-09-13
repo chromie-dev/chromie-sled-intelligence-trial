@@ -355,3 +355,43 @@ The output must explain both why the company is credible as a prime and why a su
 The trial is complete when a reviewer can give the system one active California RFP URL and the system autonomously retrieves the relevant public documents, traces the procurement lineage, and returns a defensible competitive landscape, a ranked list of likely bidders, and a shortlist of credible primes for subcontracting outreach—with every fact traceable to a source document and page, every prediction clearly labeled, and every output validated against Chromie's frozen Supabase data contracts.
 
 See `PROJECT_BRIEF.md`, `SECURITY.md`, and `AGENTS.md` before coding.
+
+---
+
+## Running this submission
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+python -m pytest -q                 # 757 tests, offline, no credentials
+
+python -m sled_trial.cli analyze \
+  --opportunity data/examples/active_opportunity.json \
+  --download-documents --output build
+```
+
+`analyze` reads whatever the harvesters have already cached, so the commands below feed it.
+Each writes its own coverage file recording what it collected against what the source
+said existed.
+
+**Who bid** — the surfaces that name competitors, not just winners:
+`planetbids` (agency portals; largest bidder source, needs a browser),
+`bidders` (Caltrans weekly results; resumable, so a long backfill survives interruption),
+`tabulations` (SF Public Works).
+
+**Who won, and who they are:** `spending`, `lpa` (statewide contract vehicles, joined on
+supplier id), `suppliers` (location and certification index), `cslb` (contractor register).
+
+**Opportunities:** `events`, `documents`, `csu` (23 campuses), `sacramento`.
+
+**Reporting:** `coverage` (what every source holds, reconciled against portal totals),
+`evaluate` (regenerates the precision figures offline — run it before `analyze` if you
+want `report.md` to quote current ones), `backfill-primes`.
+
+**Credentialed sources:** `auth --source <key>` signs in once through a hosted browser and
+saves the session; `limits` reports what the browser key is allowed to do. Credentials live
+in `.env` only — see `SECURITY.md` for what is and is not in bounds.
+
+`build/` and `data/raw/` are generated and gitignored. Findings, dead ends and measured
+source limits are in `DECISIONS.md`; the surveyed surfaces are in
+`sources/source_registry.csv` and `docs/SOURCES.md`.

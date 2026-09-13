@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gov_procurement_sources",
+  "description": "PROPOSED CONTRACT - not an export of Chromie's production schema. Authored from the pattern table in README.md; the trial author confirmed on 2026-09-08 that no separate snapshot is coming. Validating against this proves internal consistency of the trial's own outputs, and makes no claim of production compatibility. Assumptions and validation gaps: docs/supabase_mapping.md.",
+  "type": "object",
+  "required": [
+    "id",
+    "source_key",
+    "provider",
+    "jurisdiction"
+  ],
+  "properties": {
+    "id": {
+      "type": [
+        "string"
+      ]
+    },
+    "source_key": {
+      "type": [
+        "string"
+      ]
+    },
+    "provider": {
+      "type": [
+        "string"
+      ]
+    },
+    "portal": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "jurisdiction": {
+      "type": [
+        "string"
+      ]
+    },
+    "platform": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "official_url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "search_url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "adapter_key": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "access_mode": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "capabilities": {
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "refresh_cadence": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "verification_state": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "known_access_gaps": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "observed_at": {
+      "type": [
+        "string"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

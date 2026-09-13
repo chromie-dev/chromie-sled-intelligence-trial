@@ -6,3 +6,7 @@ build/
 data/raw/
 *.pyc
 
+*.egg-info/
+build_docs/
+PLAN.txt
+tasks/

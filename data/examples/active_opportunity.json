@@ -1,0 +1,40 @@
+{
+  "_comment": [
+    "Shaped from a real public Cal eProcure event. README states the repository would",
+    "provide this file; it was absent, so it is authored here and logged as an assumption",
+    "in DECISIONS.md. Identity is the (business_unit, event_id) pair: event_id alone is",
+    "not unique across agencies, and its format varies by department.",
+    "Fields left null are genuinely unknown from portal metadata and must stay null.",
+    "STATUS: this event has since closed and left the active-event feed. Cal eProcure",
+    "carries open events only, so disappearance is its sole closure signal. Its detail",
+    "page and both attachments remain retrievable by (business_unit, event_id), verified",
+    "2026-09-10, so the demo still runs end to end. It is kept as the example because its",
+    "intent-to-award PDF is the only document in the corpus that names a bidder against a",
+    "specific solicitation. Point --opportunity at any other file to analyse a live event."
+  ],
+  "business_unit": "2740",
+  "event_id": "0000040075",
+  "agency": "Department of Motor Vehicles",
+  "department": "Department of Motor Vehicles",
+  "title": "Darktrace Software and Support Renewal",
+  "solicitation_number": "ISD26-4620",
+  "category": "IT Goods",
+  "amount": 437862.48,
+  "amount_basis": "value stated in the posted intent-to-award notice for this solicitation",
+  "required_certifications": [],
+  "vehicle": null,
+  "due_date": null,
+  "canonical_url": "https://caleprocure.ca.gov/event/2740/0000040075",
+  "client_profile": {
+    "_comment": "Who we are advising. Drives the teaming rationale, not the credibility test.",
+    "categories": [
+      "IT Services"
+    ],
+    "certifications": [
+      "DVBE",
+      "SB"
+    ]
+  },
+  "analysis_cutoff": "09/03/2026",
+  "cutoff_basis": "predictions may use only awards dated before this date"
+}
